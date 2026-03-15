@@ -1,0 +1,14 @@
+name: Sync Fork with Upstream
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Every Monday at 6am UTC
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh repo sync ${{ github.repository }} --source supaku/agentfactory --branch main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
