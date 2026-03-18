@@ -24,8 +24,18 @@ import {
   RedisProcessingStateStorage,
   storeSessionState,
   dispatchWork as issueLockDispatchWork,
+  redisSet,
+  redisGet,
+  redisDel,
+  redisKeys,
+  isRedisConfigured,
 } from '@supaku/agentfactory-server'
 import type { QueuedWork } from '@supaku/agentfactory-server'
+import {
+  getFileScopesForLabels,
+  hasOverlap,
+  type FileScopeConfig,
+} from '@supaku/agentfactory'
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -49,6 +59,7 @@ export interface RealDependenciesConfig {
   resolveOAuthClient?: () => Promise<LinearAgentClient | undefined>  // Lazy OAuth client resolver (re-resolves token from Redis on each call)
   organizationId?: string                  // Workspace ID for session state storage
   generatePrompt?: (identifier: string, workType: string, mentionContext?: string, workflowContext?: WorkflowContext) => string
+  fileScopes?: FileScopeConfig             // Label → file path prefix mapping for merge-conflict prevention
 }
 
 // ---------------------------------------------------------------------------
@@ -402,5 +413,101 @@ export function createRealDependencies(
         throw err // Re-throw so the governor can record the error
       }
     },
+
+    // -----------------------------------------------------------------------
+    // 12. checkFileScopeConflict -- check if issue's file scope overlaps with active agents
+    // -----------------------------------------------------------------------
+    ...(config.fileScopes ? {
+      checkFileScopeConflict: async (issue: GovernorIssue): Promise<boolean> => {
+        if (!isRedisConfigured() || !config.fileScopes) return false
+        try {
+          const newScopes = getFileScopesForLabels(issue.labels, config.fileScopes)
+          if (newScopes.length === 0) return false
+
+          // Load all active file scopes from Redis
+          const keys = await redisKeys('af:file-scope:*')
+          if (keys.length === 0) return false
+
+          const activeScopes = new Map<string, string[]>()
+          for (const key of keys) {
+            const scopes = await redisGet<string[]>(key)
+            if (scopes) {
+              activeScopes.set(key, scopes)
+            }
+          }
+
+          const overlaps = hasOverlap(activeScopes, newScopes)
+          if (overlaps) {
+            log.info('File scope conflict detected', {
+              issueIdentifier: issue.identifier,
+              issueScopes: newScopes,
+              activeKeys: keys,
+            })
+          }
+          return overlaps
+        } catch (err) {
+          log.error('checkFileScopeConflict failed', {
+            issueIdentifier: issue.identifier,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return false // Fail open — allow dispatch if check fails
+        }
+      },
+
+      // -----------------------------------------------------------------------
+      // 13. registerFileScope -- register file scopes after successful dispatch
+      // -----------------------------------------------------------------------
+      registerFileScope: async (issue: GovernorIssue): Promise<void> => {
+        if (!isRedisConfigured() || !config.fileScopes) return
+        try {
+          const scopes = getFileScopesForLabels(issue.labels, config.fileScopes)
+          if (scopes.length === 0) return
+
+          const key = `af:file-scope:${issue.id}`
+          const FILE_SCOPE_TTL = 7200 // 2 hours safety net
+          await redisSet(key, scopes, FILE_SCOPE_TTL)
+
+          log.info('Registered file scopes', {
+            issueIdentifier: issue.identifier,
+            issueId: issue.id,
+            scopes,
+            key,
+          })
+        } catch (err) {
+          log.error('registerFileScope failed', {
+            issueIdentifier: issue.identifier,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      },
+
+      // -----------------------------------------------------------------------
+      // 14. cleanStaleFileScopes -- remove file scope locks for completed sessions
+      // -----------------------------------------------------------------------
+      cleanStaleFileScopes: async (): Promise<void> => {
+        if (!isRedisConfigured()) return
+        try {
+          const keys = await redisKeys('af:file-scope:*')
+          if (keys.length === 0) return
+
+          for (const key of keys) {
+            // Extract issue ID from key (e.g., "af:file-scope:abc-123-def" → "abc-123-def")
+            const issueId = key.replace('af:file-scope:', '')
+
+            // Direct lookup — O(1) per key since we use issue.id as the key
+            const session = await getSessionStateByIssue(issueId)
+            const activeStatuses = ['running', 'claimed', 'pending', 'finalizing']
+            if (!session || !activeStatuses.includes(session.status)) {
+              await redisDel(key)
+              log.info('Cleaned stale file scope', { key, issueId })
+            }
+          }
+        } catch (err) {
+          log.error('cleanStaleFileScopes failed', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      },
+    } : {}),
   }
 }

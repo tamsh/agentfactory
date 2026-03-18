@@ -85,6 +85,12 @@ export interface GovernorDependencies {
   getCompletedSessionCount: (issueId: string) => Promise<number>
   /** Dispatch work for an issue with a specific action */
   dispatchWork: (issue: GovernorIssue, action: GovernorAction) => Promise<void>
+  /** (Optional) Check if dispatching this issue would conflict with active agents' file scopes */
+  checkFileScopeConflict?: (issue: GovernorIssue) => Promise<boolean>
+  /** (Optional) Register file scopes after successful dispatch */
+  registerFileScope?: (issue: GovernorIssue) => Promise<void>
+  /** (Optional) Clean up stale file scope locks from completed sessions */
+  cleanStaleFileScopes?: () => Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +250,17 @@ export class WorkflowGovernor {
 
     result.scannedIssues = issues.length
 
+    // Clean stale file scope locks from completed sessions
+    if (this.deps.cleanStaleFileScopes) {
+      try {
+        await this.deps.cleanStaleFileScopes()
+      } catch (err) {
+        log.warn('Failed to clean stale file scopes', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+
     log.info('Scanning project', {
       project,
       issueCount: issues.length,
@@ -299,9 +316,48 @@ export class WorkflowGovernor {
         break
       }
 
+      // Check file scope conflict before dispatching
+      // Only for mutating actions — QA, acceptance, and refinement agents are read-only reviewers
+      const mutatingActions: Set<GovernorAction> = new Set([
+        'trigger-development', 'trigger-research', 'trigger-backlog-creation', 'decompose',
+      ])
+      if (this.deps.checkFileScopeConflict && mutatingActions.has(item.action)) {
+        try {
+          const hasConflict = await this.deps.checkFileScopeConflict(item.issue)
+          if (hasConflict) {
+            log.info('Skipping dispatch — file scope overlap with active agent', {
+              issueIdentifier: item.issue.identifier,
+              action: item.action,
+            })
+            result.skippedReasons.set(
+              item.issue.identifier,
+              'File scope overlap with active agent',
+            )
+            continue
+          }
+        } catch (err) {
+          log.warn('File scope check failed, proceeding with dispatch', {
+            issueIdentifier: item.issue.identifier,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+
       try {
         await this.deps.dispatchWork(item.issue, item.action)
         result.actionsDispatched++
+
+        // Register file scopes after successful dispatch (only for mutating actions)
+        if (this.deps.registerFileScope && mutatingActions.has(item.action)) {
+          try {
+            await this.deps.registerFileScope(item.issue)
+          } catch (err) {
+            log.warn('Failed to register file scope', {
+              issueIdentifier: item.issue.identifier,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
 
         log.info('Dispatched action', {
           issueIdentifier: item.issue.identifier,

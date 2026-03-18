@@ -43,7 +43,7 @@ import {
 import { getVersion, checkForUpdate, printUpdateNotification } from './lib/version.js'
 import { maybeAutoUpdate, isAutoUpdateEnabled } from './lib/auto-updater.js'
 import { createLinearAgentClient, type LinearAgentClient, type LinearApiQuota } from '@supaku/agentfactory-linear'
-import { createLogger, initTouchpointStorage } from '@supaku/agentfactory'
+import { createLogger, initTouchpointStorage, loadRepositoryConfig } from '@supaku/agentfactory'
 import {
   RedisOverrideStorage,
   listStoredWorkspaces,
@@ -134,6 +134,13 @@ async function main(): Promise<void> {
   // -----------------------------------------------------------------------
   let dependencies: GovernorDependencies
   let linearClient: ReturnType<typeof createLinearAgentClient> | undefined
+
+  // Load repository config for fileScopes (merge-conflict prevention)
+  const repoConfig = loadRepositoryConfig(process.cwd())
+  const fileScopes = repoConfig?.fileScopes
+  if (fileScopes) {
+    log.info('File scope serialization enabled', { labels: Object.keys(fileScopes) })
+  }
 
   const linearApiKey = process.env.LINEAR_API_KEY
   const redisUrl = process.env.REDIS_URL
@@ -241,6 +248,7 @@ async function main(): Promise<void> {
       resolveOAuthClient,
       organizationId,
       generatePrompt: defaultGeneratePrompt,
+      fileScopes,
     })
   } else {
     log.warn('LINEAR_API_KEY not set — using stub dependencies (no real work will be dispatched)')

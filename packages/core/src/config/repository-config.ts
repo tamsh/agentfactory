@@ -55,6 +55,13 @@ export const RepositoryConfigSchema = z.object({
    * Injected into workflow templates as {{validateCommand}}.
    */
   validateCommand: z.string().optional(),
+  /**
+   * File scope mapping for merge-conflict prevention.
+   * Maps issue labels to directory prefixes they typically touch.
+   * Issues with overlapping file scopes are serialized by the governor.
+   * Example: { web: ['src/', 'api/'], ios: ['native-ios/'] }
+   */
+  fileScopes: z.record(z.string(), z.array(z.string())).optional(),
 }).refine(
   (data) => !(data.allowedProjects && data.projectPaths),
   { message: 'allowedProjects and projectPaths are mutually exclusive — use one or the other' },
