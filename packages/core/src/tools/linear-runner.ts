@@ -1,7 +1,7 @@
 /**
  * Linear CLI Runner — process-agnostic Linear operations.
  *
- * All 16 command implementations. This module does NOT call process.exit,
+ * All 19 command implementations. This module does NOT call process.exit,
  * read process.argv, or load dotenv. Shared by both the CLI entry point
  * and the in-process tool plugin.
  */
@@ -121,6 +121,91 @@ interface CreateBlockerOptions {
   assignee?: string
 }
 
+// ── Label helpers ──────────────────────────────────────────────────
+
+/** Resolve label names to IDs, warn on unmatched */
+async function resolveLabelIds(
+  client: LinearClient,
+  labelNames: string[]
+): Promise<{ labelIds: string[]; unmatched: string[]; allLabels: Array<{ id: string; name: string }> }> {
+  const allLabels = await client.linearClient.issueLabels()
+  const labelIds: string[] = []
+  const unmatched: string[] = []
+  for (const name of labelNames) {
+    const label = allLabels.nodes.find(
+      (l) => l.name.toLowerCase() === name.toLowerCase()
+    )
+    if (label) {
+      labelIds.push(label.id)
+    } else {
+      unmatched.push(name)
+    }
+  }
+  if (unmatched.length > 0) {
+    console.warn(`[linear] Warning: labels not found in Linear (check casing): ${unmatched.join(', ')}`)
+    console.warn(`[linear] Available labels: ${allLabels.nodes.map((l) => l.name).join(', ')}`)
+  }
+  return { labelIds, unmatched, allLabels: allLabels.nodes.map((l) => ({ id: l.id, name: l.name })) }
+}
+
+/** List all available labels for the workspace */
+async function listLabels(client: LinearClient): Promise<unknown> {
+  const allLabels = await client.linearClient.issueLabels()
+  return allLabels.nodes.map((l) => ({
+    id: l.id,
+    name: l.name,
+    color: l.color,
+  }))
+}
+
+/** Add labels to an issue (appends, does not replace) */
+async function addLabels(client: LinearClient, issueId: string, labelNames: string[]): Promise<unknown> {
+  const issue = await client.getIssue(issueId)
+  const existingLabels = await issue.labels()
+  const existingIds = existingLabels.nodes.map((l) => l.id)
+
+  const { labelIds: newIds, unmatched } = await resolveLabelIds(client, labelNames)
+  if (newIds.length === 0) {
+    throw new Error(`None of the labels matched: ${labelNames.join(', ')}`)
+  }
+
+  // Merge: existing + new (deduplicated)
+  const mergedIds = [...new Set([...existingIds, ...newIds])]
+  await client.updateIssue(issue.id, { labelIds: mergedIds })
+
+  const addedNames = labelNames.filter((n) => !unmatched.includes(n))
+  return {
+    identifier: issue.identifier,
+    added: addedNames,
+    unmatched: unmatched.length > 0 ? unmatched : undefined,
+    totalLabels: mergedIds.length,
+  }
+}
+
+/** Remove labels from an issue */
+async function removeLabels(client: LinearClient, issueId: string, labelNames: string[]): Promise<unknown> {
+  const issue = await client.getIssue(issueId)
+  const existingLabels = await issue.labels()
+
+  const { labelIds: removeIds } = await resolveLabelIds(client, labelNames)
+  if (removeIds.length === 0) {
+    throw new Error(`None of the labels matched: ${labelNames.join(', ')}`)
+  }
+
+  const removeSet = new Set(removeIds)
+  const remainingIds = existingLabels.nodes.filter((l) => !removeSet.has(l.id)).map((l) => l.id)
+  await client.updateIssue(issue.id, { labelIds: remainingIds })
+
+  return {
+    identifier: issue.identifier,
+    removed: labelNames.filter((n) => {
+      const allLabels = existingLabels.nodes
+      return allLabels.some((l) => l.name.toLowerCase() === n.toLowerCase())
+    }),
+    remainingLabels: remainingIds.length,
+  }
+}
+
 // ── Command implementations ────────────────────────────────────────
 
 async function getIssue(client: LinearClient, issueId: string): Promise<unknown> {
@@ -181,13 +266,20 @@ async function createIssue(client: LinearClient, options: CreateIssueOptions): P
   if (options.labels && options.labels.length > 0) {
     const allLabels = await client.linearClient.issueLabels()
     const labelIds: string[] = []
+    const unmatchedLabels: string[] = []
     for (const labelName of options.labels) {
       const label = allLabels.nodes.find(
         (l) => l.name.toLowerCase() === labelName.toLowerCase()
       )
       if (label) {
         labelIds.push(label.id)
+      } else {
+        unmatchedLabels.push(labelName)
       }
+    }
+    if (unmatchedLabels.length > 0) {
+      console.warn(`[linear] Warning: labels not found in Linear (check casing): ${unmatchedLabels.join(', ')}`)
+      console.warn(`[linear] Available labels: ${allLabels.nodes.map((l) => l.name).join(', ')}`)
     }
     if (labelIds.length > 0) {
       createPayload.labelIds = labelIds
@@ -241,15 +333,25 @@ async function updateIssue(
   if (options.labels && options.labels.length > 0) {
     const allLabels = await client.linearClient.issueLabels()
     const labelIds: string[] = []
+    const unmatchedLabels: string[] = []
     for (const labelName of options.labels) {
       const label = allLabels.nodes.find(
         (l) => l.name.toLowerCase() === labelName.toLowerCase()
       )
       if (label) {
         labelIds.push(label.id)
+      } else {
+        unmatchedLabels.push(labelName)
       }
     }
-    updateData.labelIds = labelIds
+    if (unmatchedLabels.length > 0) {
+      console.warn(`[linear] Warning: labels not found in Linear (check casing): ${unmatchedLabels.join(', ')}`)
+      console.warn(`[linear] Available labels: ${allLabels.nodes.map((l) => l.name).join(', ')}`)
+    }
+    if (labelIds.length > 0) {
+      updateData.labelIds = labelIds
+    }
+    // Don't assign empty labelIds — prevents accidental label wipe
   }
 
   const updatedIssue = await client.updateIssue(issue.id, updateData)
@@ -932,6 +1034,31 @@ export async function runLinear(config: LinearRunnerConfig): Promise<LinearRunne
         project: args.project as string | undefined,
         assignee: args.assignee as string | undefined,
       })
+      break
+    }
+
+    case 'list-labels': {
+      output = await listLabels(client())
+      break
+    }
+
+    case 'add-label': {
+      const issueId = requirePositional('issue-id')
+      if (!args.labels) {
+        throw new Error('Usage: af-linear add-label <issue-id> --labels "Label1,Label2"')
+      }
+      const labelList = Array.isArray(args.labels) ? args.labels : (args.labels as string).split(',').map((s: string) => s.trim())
+      output = await addLabels(client(), issueId, labelList)
+      break
+    }
+
+    case 'remove-label': {
+      const issueId = requirePositional('issue-id')
+      if (!args.labels) {
+        throw new Error('Usage: af-linear remove-label <issue-id> --labels "Label1,Label2"')
+      }
+      const labelList = Array.isArray(args.labels) ? args.labels : (args.labels as string).split(',').map((s: string) => s.trim())
+      output = await removeLabels(client(), issueId, labelList)
       break
     }
 
