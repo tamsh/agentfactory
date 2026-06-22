@@ -6,6 +6,8 @@ import {
   isPullRequest,
   labelNames,
   githubIssueToRaw,
+  MANAGED_LABELS,
+  writeLabelForStatus,
 } from './mappers.js'
 import type { GitHubRestIssue } from './types.js'
 
@@ -111,5 +113,33 @@ describe('githubIssueToRaw', () => {
       childCount: 0,
     })
     expect(raw.createdAt).toBe(new Date('2026-04-15T23:41:05Z').getTime())
+  })
+})
+
+describe('workflow vocabulary (single source of truth)', () => {
+  it('reads synonym labels back to their canonical status', () => {
+    expect(statusFromIssue(issue({ labels: [{ name: 'qa' }] }))).toBe('Finished')
+    expect(statusFromIssue(issue({ labels: [{ name: 'started' }] }))).toBe('Started')
+    expect(statusFromIssue(issue({ labels: [{ name: 'finished' }] }))).toBe('Finished')
+  })
+  it('MANAGED_LABELS contains every recognized label (incl. synonyms) so transitions strip them', () => {
+    for (const label of [
+      'icebox',
+      'in-progress',
+      'started',
+      'in-review',
+      'qa',
+      'finished',
+      'delivered',
+      'rejected',
+    ]) {
+      expect(MANAGED_LABELS.has(label)).toBe(true)
+    }
+  })
+  it('writeLabelForStatus returns the canonical label, and undefined for label-less Backlog', () => {
+    expect(writeLabelForStatus('Started')).toBe('in-progress')
+    expect(writeLabelForStatus('Finished')).toBe('in-review')
+    expect(writeLabelForStatus('Icebox')).toBe('icebox')
+    expect(writeLabelForStatus('Backlog')).toBeUndefined()
   })
 })

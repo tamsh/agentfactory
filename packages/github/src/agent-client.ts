@@ -9,25 +9,19 @@
  */
 
 import type { GitHubClientConfig, GitHubRestIssue, RawGovernorIssue } from './types.js'
-import { childCountFromIssue, githubIssueToRaw, isPullRequest } from './mappers.js'
+import {
+  MANAGED_LABELS,
+  OPEN_STATUSES,
+  TERMINAL_STATUSES,
+  childCountFromIssue,
+  githubIssueToRaw,
+  isPullRequest,
+  writeLabelForStatus,
+} from './mappers.js'
 
 const DEFAULT_BASE_URL = 'https://api.github.com'
 const MAX_PAGES = 100 // pagination safety ceiling — avoids a runaway loop on a bad Link header
 const MAX_RETRIES = 3 // transient-error retries (429 / 5xx / network)
-
-/** Abstract workflow status → the label this adapter applies for it. */
-const STATUS_TO_LABEL: Readonly<Record<string, string>> = {
-  Started: 'in-progress',
-  Finished: 'in-review',
-  Delivered: 'delivered',
-  Rejected: 'rejected',
-  Icebox: 'icebox',
-}
-const MANAGED_STATUS_LABELS = new Set(Object.values(STATUS_TO_LABEL))
-
-/** Statuses this adapter understands. Anything else is rejected, never silently applied. */
-const TERMINAL_STATUSES = new Set(['Accepted', 'Canceled'])
-const OPEN_STATUSES = new Set(['Backlog', 'Started', 'Finished', 'Delivered', 'Rejected', 'Icebox'])
 
 export class GitHubAgentClient {
   private readonly token: string
@@ -253,19 +247,34 @@ export class GitHubAgentClient {
       return
     }
 
-    // Recompute labels: drop managed status labels (case-insensitively), add the new one.
+    // Open-status transition. Read the issue to know which managed labels are
+    // present and whether it needs reopening.
     const issue = await this.getIssue(issueNumber, project)
-    const kept = (issue.labels ?? [])
-      .map((l) => (typeof l === 'string' ? l : l.name))
-      .filter((name) => !MANAGED_STATUS_LABELS.has(name.toLowerCase()))
-    const target = STATUS_TO_LABEL[status]
-    const labels = target ? [...kept, target] : kept
+    const target = writeLabelForStatus(status)
 
-    const patch: Record<string, unknown> = { labels }
-    // Only reopen when the issue is actually closed — never force-reopen an open one.
-    if (issue.state === 'closed') patch.state = 'open'
+    // Reopen only when actually closed — separate from the label change.
+    if (issue.state === 'closed') {
+      await this.request('PATCH', `/repos/${repo}/issues/${issueNumber}`, { state: 'open' })
+    }
 
-    await this.request('PATCH', `/repos/${repo}/issues/${issueNumber}`, patch)
+    // Swap workflow labels via the label sub-resource (DELETE managed + POST the
+    // target) so non-managed labels added concurrently (e.g. `blocked`) are never
+    // clobbered by a wholesale label replace.
+    for (const label of issue.labels ?? []) {
+      const name = typeof label === 'string' ? label : label.name
+      const lower = name.toLowerCase()
+      if (MANAGED_LABELS.has(lower) && lower !== target?.toLowerCase()) {
+        await this.request(
+          'DELETE',
+          `/repos/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(name)}`
+        )
+      }
+    }
+    if (target) {
+      await this.request('POST', `/repos/${repo}/issues/${issueNumber}/labels`, {
+        labels: [target],
+      })
+    }
   }
 
   /**

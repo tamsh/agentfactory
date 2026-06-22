@@ -9,17 +9,45 @@
 
 import type { GitHubRestIssue, RawGovernorIssue } from './types.js'
 
-/** Workflow-state label (lowercased) → governor status string. First match wins. */
-const STATUS_LABEL_MAP: ReadonlyArray<readonly [string, string]> = [
-  ['icebox', 'Icebox'],
-  ['in-progress', 'Started'],
-  ['started', 'Started'],
-  ['in-review', 'Finished'],
-  ['qa', 'Finished'],
-  ['finished', 'Finished'],
-  ['delivered', 'Delivered'],
-  ['rejected', 'Rejected'],
+/**
+ * Single source of truth for the workflow-label vocabulary. Array order defines
+ * read precedence (the first status whose `read` labels match wins). `write` is
+ * the canonical label this adapter applies for the status; `read` is every label
+ * (incl. synonyms) that maps back to it. Deriving both directions from one table
+ * guarantees the reader and writer can never drift.
+ */
+const WORKFLOW_STATES: ReadonlyArray<{
+  status: string
+  /** Canonical label written for this status; omitted for label-less statuses. */
+  write?: string
+  /** Every label (lowercased, incl. synonyms) that reads back as this status. */
+  read: readonly string[]
+}> = [
+  { status: 'Icebox', write: 'icebox', read: ['icebox'] },
+  { status: 'Started', write: 'in-progress', read: ['in-progress', 'started'] },
+  { status: 'Finished', write: 'in-review', read: ['in-review', 'qa', 'finished'] },
+  { status: 'Delivered', write: 'delivered', read: ['delivered'] },
+  { status: 'Rejected', write: 'rejected', read: ['rejected'] },
 ]
+
+/** Every recognized workflow label (lowercased) — the set a transition must strip. */
+export const MANAGED_LABELS: ReadonlySet<string> = new Set(
+  WORKFLOW_STATES.flatMap((s) => s.read)
+)
+
+/** Open (non-terminal) statuses, including the label-less `Backlog`. */
+export const OPEN_STATUSES: ReadonlySet<string> = new Set([
+  'Backlog',
+  ...WORKFLOW_STATES.map((s) => s.status),
+])
+
+/** Terminal statuses — these close the issue. */
+export const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['Accepted', 'Canceled'])
+
+/** Canonical label to apply for a status, or undefined for label-less statuses (Backlog). */
+export function writeLabelForStatus(status: string): string | undefined {
+  return WORKFLOW_STATES.find((s) => s.status === status)?.write
+}
 
 /** Priority label (lowercased) → numeric priority (1=urgent … 4=low, 0=none). */
 const PRIORITY_LABEL_MAP: Readonly<Record<string, number>> = {
@@ -49,8 +77,8 @@ export function statusFromIssue(issue: GitHubRestIssue): string {
     return issue.state_reason === 'not_planned' ? 'Canceled' : 'Accepted'
   }
   const names = new Set(labelNames(issue).map((n) => n.toLowerCase()))
-  for (const [label, status] of STATUS_LABEL_MAP) {
-    if (names.has(label)) return status
+  for (const state of WORKFLOW_STATES) {
+    if (state.read.some((label) => names.has(label))) return state.status
   }
   return 'Backlog'
 }
