@@ -918,9 +918,12 @@ export class AgentOrchestrator {
       this.templateRegistry = TemplateRegistry.create({
         templateDirs,
         useBuiltinDefaults: true,
-        // Frontend follows the injected tracker so template selection/rendering
-        // is tracker-aware (was hardcoded 'linear').
-        frontend: this.client.name,
+        // No partial declares a `frontend`, so the loader never filters by it —
+        // passing the tracker name (e.g. 'github') silently loads the same
+        // Linear partials and implies a github-template mechanism that does not
+        // exist. Templates are tracker-neutral via {{linearCli}}, so keep this a
+        // single constant to avoid the misleading per-tracker value.
+        frontend: 'linear',
       })
       this.templateRegistry.setToolPermissionAdapter(createToolPermissionAdapter(this.provider.name))
     } catch {
@@ -1048,12 +1051,12 @@ export class AgentOrchestrator {
       if (projects.nodes.length > 0) {
         filter.project = { id: { eq: projects.nodes[0].id } }
 
-        // Cross-reference project repo metadata with config (SUP-725)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime check for method added in SUP-725
-        const clientAny = this.client as any
-        if (this.config.repository && typeof clientAny.getProjectRepositoryUrl === 'function') {
+        // Cross-reference project repo metadata with config (SUP-725).
+        // getProjectRepositoryUrl is an optional method on IssueTrackerClient
+        // (Linear-only); the optional call is a no-op on trackers without it.
+        if (this.config.repository) {
           try {
-            const projectRepoUrl: string | null = await clientAny.getProjectRepositoryUrl(projects.nodes[0].id)
+            const projectRepoUrl: string | null | undefined = await this.client.getProjectRepositoryUrl?.(projects.nodes[0].id)
             if (projectRepoUrl) {
               const normalizedProjectRepo = projectRepoUrl
                 .replace(/^https?:\/\//, '')
@@ -1157,6 +1160,14 @@ export class AgentOrchestrator {
     for (const issue of backlog) {
       if (results.length >= maxIssues) break
 
+      // Only dispatch issues that are actually in Backlog. listBacklogIssues may
+      // return non-terminal issues in other states (Started/Finished); the Linear
+      // raw-SDK path filters state.name === 'Backlog', so mirror that here to
+      // avoid spawning dev agents on already-in-progress work.
+      if (issue.status !== 'Backlog') {
+        continue
+      }
+
       // Honor allowedProjects filtering by the tracker's project name when set.
       // TrackerBacklogIssue carries no project name, so we use the configured
       // project (the only project this scan targets) for the membership check.
@@ -1168,9 +1179,6 @@ export class AgentOrchestrator {
           )
           continue
         }
-      }
-      if (!resolvedProjectName && this.projectPaths) {
-        resolvedProjectName = this.config.project
       }
 
       results.push({
@@ -1948,7 +1956,11 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
         repository: this.config.repository,
         projectPath: this.projectPaths?.[projectName ?? ''],
         sharedPaths: this.sharedPaths,
-        useToolPlugins: this.provider.name === 'claude',
+        // The af_linear_* tool plugin is only registered for Linear (see ctor),
+        // so only render the tool-plugin template branch when BOTH the provider
+        // is Claude AND the tracker is Linear. GitHub+Claude agents fall through
+        // to the CLI-instruction branch which uses {{linearCli}} (pnpm af-issue).
+        useToolPlugins: this.provider.name === 'claude' && this.client.name === 'linear',
         linearCli: this.linearCli ?? 'pnpm af-issue',
         packageManager: this.packageManager ?? 'pnpm',
         buildCommand: this.buildCommand,

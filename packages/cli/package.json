@@ -69,6 +69,11 @@
         "types": "./dist/src/lib/sync-routes-runner.d.ts",
         "import": "./dist/src/lib/sync-routes-runner.js",
         "default": "./dist/src/lib/sync-routes-runner.js"
+      },
+      "./tracker": {
+        "types": "./dist/src/lib/tracker/index.d.ts",
+        "import": "./dist/src/lib/tracker/index.js",
+        "default": "./dist/src/lib/tracker/index.js"
       }
     },
     "main": "./dist/src/index.js",
@@ -147,6 +152,11 @@
       "types": "./dist/src/lib/sync-routes-runner.d.ts",
       "import": "./dist/src/lib/sync-routes-runner.js",
       "default": "./dist/src/lib/sync-routes-runner.js"
+    },
+    "./tracker": {
+      "types": "./dist/src/lib/tracker/index.d.ts",
+      "import": "./dist/src/lib/tracker/index.js",
+      "default": "./dist/src/lib/tracker/index.js"
     }
   },
   "files": [

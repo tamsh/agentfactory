@@ -58,4 +58,10 @@ describe('@supaku/agentfactory-cli subpath exports', () => {
     expect(mod.parseLinearArgs).toBeDefined()
     expect(typeof mod.parseLinearArgs).toBe('function')
   })
+
+  it('exports createTrackerClient from ./tracker', async () => {
+    const mod = await import('../lib/tracker/index.js')
+    expect(mod.createTrackerClient).toBeDefined()
+    expect(typeof mod.createTrackerClient).toBe('function')
+  })
 })

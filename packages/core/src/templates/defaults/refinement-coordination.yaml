@@ -7,7 +7,7 @@ metadata:
 
 tools:
   allow:
-    - shell: "pnpm af-linear *"
+    - shell: "pnpm af-issue *"
   disallow:
     - user-input
     - shell: "git *"
