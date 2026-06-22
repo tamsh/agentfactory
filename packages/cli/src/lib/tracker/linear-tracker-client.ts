@@ -62,4 +62,13 @@ export class LinearTrackerClient implements IssueTrackerClient {
   async getProjectRepositoryUrl(projectId: string): Promise<string | null> {
     return this.client.getProjectRepositoryUrl(projectId)
   }
+
+  /**
+   * Expose the raw Linear SDK client for the orchestrator's Linear-only
+   * agent-session streaming path (`createAgentSession`). GitHub has no
+   * equivalent and intentionally does not implement this method.
+   */
+  getRawClient(): unknown {
+    return this.client.linearClient
+  }
 }
