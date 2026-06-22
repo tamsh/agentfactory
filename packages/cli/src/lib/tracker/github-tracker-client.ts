@@ -34,7 +34,7 @@ export class GitHubTrackerClient implements IssueTrackerClient {
     await this.client.createComment(num(idOrIdentifier), body)
   }
 
-  async unassignIssue(): Promise<void> {
+  async unassignIssue(_idOrIdentifier: string): Promise<void> {
     // GitHub has no agent-assignee model in this adapter — no-op.
   }
 
