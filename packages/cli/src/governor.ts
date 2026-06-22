@@ -43,6 +43,7 @@ import {
 import { getVersion, checkForUpdate, printUpdateNotification } from './lib/version.js'
 import { maybeAutoUpdate, isAutoUpdateEnabled } from './lib/auto-updater.js'
 import { createLinearAgentClient, type LinearAgentClient, type LinearApiQuota } from '@supaku/agentfactory-linear'
+import { createGitHubAgentClient } from '@supaku/agentfactory-github'
 import { createLogger, initTouchpointStorage, loadRepositoryConfig } from '@supaku/agentfactory'
 import {
   RedisOverrideStorage,
@@ -144,6 +145,8 @@ async function main(): Promise<void> {
 
   const linearApiKey = process.env.LINEAR_API_KEY
   const redisUrl = process.env.REDIS_URL
+  const githubRepo = process.env.GITHUB_REPO
+  const githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN
 
   // Track latest quota from API responses
   let latestQuota: LinearApiQuota | undefined
@@ -151,7 +154,25 @@ async function main(): Promise<void> {
   let redisConnected = false
   let oauthResolved = false
 
-  if (linearApiKey) {
+  // GitHub Issues adapter (env-gated). When GITHUB_REPO + token are set, the
+  // governor scans GitHub instead of Linear. The scan loop only calls
+  // listProjectIssues + isParentIssue — both implemented by GitHubAgentClient,
+  // so it drops in where createRealDependencies expects a Linear client.
+  if (githubRepo && githubToken) {
+    const githubClient = createGitHubAgentClient({ token: githubToken, repo: githubRepo })
+    log.info('Using GitHub Issues adapter for governor scan', { repo: githubRepo })
+    // Touchpoint storage powers holds/overrides (isHeld / getOverridePriority).
+    // Must be initialized on the GitHub path too, not just Linear.
+    if (redisUrl) {
+      redisConnected = true
+      initTouchpointStorage(new RedisOverrideStorage())
+    }
+    dependencies = createRealDependencies({
+      linearClient: githubClient as unknown as LinearAgentClient,
+      generatePrompt: defaultGeneratePrompt,
+      fileScopes,
+    })
+  } else if (linearApiKey) {
     let organizationId: string | undefined
 
     // Shared rate limiter and circuit breaker strategies (Redis-backed when available)
