@@ -13,6 +13,7 @@ import {
   type AgentProcess,
   type OrchestratorIssue,
 } from '@supaku/agentfactory'
+import { createTrackerClient } from './tracker/index.js'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -137,6 +138,7 @@ export async function runOrchestrator(
   const cb = config.callbacks ?? defaultCallbacks()
 
   const orchestratorConfig: Record<string, unknown> = {
+    tracker: createTrackerClient(),
     project: config.project,
     maxConcurrent,
     worktreePath: path.resolve(gitRoot, '.worktrees'),

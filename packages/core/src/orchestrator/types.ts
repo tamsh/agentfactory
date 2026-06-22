@@ -4,6 +4,7 @@
 
 import type { AgentWorkType } from '@supaku/agentfactory-linear'
 import type { AgentProvider } from '../providers/types.js'
+import type { IssueTrackerClient } from './issue-tracker-client.js'
 
 /**
  * Result of parsing an agent's output to determine pass/fail
@@ -30,7 +31,17 @@ export interface OrchestratorConfig {
   project?: string
   /** Base path for git worktrees (default: .worktrees) */
   worktreePath?: string
-  /** Linear API key (defaults to LINEAR_API_KEY env var) */
+  /**
+   * Issue tracker client the orchestrator depends on for all issue operations.
+   * Required. Inject a LinearTrackerClient or GitHubTrackerClient (see
+   * createTrackerClient()). This decouples dispatch from any single tracker.
+   */
+  tracker?: IssueTrackerClient
+  /**
+   * @deprecated No longer used by the orchestrator — inject `tracker` instead.
+   * Retained only for backward compatibility of the config shape; setting it
+   * has no effect on tracker selection.
+   */
   linearApiKey?: string
   /** Whether to auto-transition issue status (default: true) */
   autoTransition?: boolean

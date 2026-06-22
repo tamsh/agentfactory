@@ -13,7 +13,11 @@ import {
   createOrchestrator,
   type AgentOrchestrator,
   type AgentProcess,
+  type IssueTrackerClient,
+  type TrackerIssue,
+  type TrackerBacklogIssue,
 } from '@supaku/agentfactory'
+import type { LinearAgentClient, LinearWorkflowStatus } from '@supaku/agentfactory-linear'
 import {
   withRetry,
   AgentSpawnError,
@@ -68,6 +72,63 @@ function getLinearClientFromEnv() {
   const apiKey = process.env.LINEAR_ACCESS_TOKEN
   if (!apiKey) return null
   return createLinearAgentClient({ apiKey })
+}
+
+/**
+ * Wrap a LinearAgentClient in the tracker-agnostic IssueTrackerClient surface
+ * the orchestrator now requires. This webhook deployment is Linear-only, so it
+ * always injects a Linear tracker. (Mirrors LinearTrackerClient in the CLI
+ * package, inlined here to avoid a cross-package dependency.)
+ */
+function toLinearTracker(client: LinearAgentClient): IssueTrackerClient {
+  return {
+    name: 'linear',
+    async getTrackerIssue(idOrIdentifier: string): Promise<TrackerIssue> {
+      const issue = await client.getIssue(idOrIdentifier)
+      const [team, project, state] = await Promise.all([issue.team, issue.project, issue.state])
+      return {
+        id: issue.id,
+        identifier: issue.identifier,
+        title: issue.title,
+        teamKey: team?.key,
+        projectName: project?.name,
+        statusName: state?.name,
+      }
+    },
+    async updateIssueStatus(idOrIdentifier: string, status: string): Promise<void> {
+      await client.updateIssueStatus(idOrIdentifier, status as LinearWorkflowStatus)
+    },
+    async createComment(idOrIdentifier: string, body: string): Promise<void> {
+      await client.createComment(idOrIdentifier, body)
+    },
+    async unassignIssue(idOrIdentifier: string): Promise<void> {
+      await client.unassignIssue(idOrIdentifier)
+    },
+    async isParentIssue(idOrIdentifier: string): Promise<boolean> {
+      return client.isParentIssue(idOrIdentifier)
+    },
+    async listBacklogIssues(project: string): Promise<TrackerBacklogIssue[]> {
+      const issues = await client.listProjectIssues(project)
+      return issues.map((i) => ({
+        id: i.id,
+        identifier: i.identifier,
+        title: i.title,
+        status: i.status,
+        labels: i.labels,
+        parentId: i.parentId,
+      }))
+    },
+    async createAgentSessionOnIssue(input: { issueId: string }) {
+      const result = await client.createAgentSessionOnIssue({ issueId: input.issueId })
+      return { success: result.success, sessionId: result.sessionId }
+    },
+    async getProjectRepositoryUrl(projectId: string): Promise<string | null> {
+      return client.getProjectRepositoryUrl(projectId)
+    },
+    getRawClient(): unknown {
+      return client.linearClient
+    },
+  }
 }
 
 /**
@@ -173,7 +234,7 @@ export function createWebhookOrchestrator(
 
       _orchestrator = createOrchestrator(
         {
-          linearApiKey: apiKey,
+          tracker: toLinearTracker(createLinearAgentClient({ apiKey })),
           maxConcurrent: config?.maxConcurrent ?? 10,
           autoTransition: config?.autoTransition ?? true,
         },

@@ -64,4 +64,13 @@ export interface IssueTrackerClient {
 
   /** Optional: repository URL for a project (Linear-specific; undefined elsewhere). */
   getProjectRepositoryUrl?(projectId: string): Promise<string | null>
+
+  /**
+   * Optional: the underlying raw tracker SDK client, for the few Linear-only
+   * code paths that have no tracker-agnostic equivalent yet (agent-session
+   * activity streaming). Returns undefined/absent on trackers (e.g. GitHub)
+   * that have no agent-session concept. Callers MUST treat a falsy result as
+   * "skip this Linear-only path".
+   */
+  getRawClient?(): unknown
 }

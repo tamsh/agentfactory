@@ -15,7 +15,7 @@ import {
   disconnectRedis,
   type AgentSessionState,
 } from '@supaku/agentfactory-server'
-import { createLinearAgentClient } from '@supaku/agentfactory-linear'
+import { createTrackerClient } from './tracker/index.js'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -223,29 +223,29 @@ async function reconnectSession(issueId: string): Promise<void> {
 
   console.log(`Found: ${formatSession(session)}`)
 
-  // Create a new Linear agent session on the issue
-  const apiKey = process.env.LINEAR_API_KEY
-  if (!apiKey) {
-    console.error(`${C.red}LINEAR_API_KEY is required for reconnect${C.reset}`)
+  // Create a new agent session on the issue via the configured tracker
+  let tracker
+  try {
+    tracker = createTrackerClient()
+  } catch (err) {
+    console.error(`${C.red}${err instanceof Error ? err.message : String(err)}${C.reset}`)
     await disconnectRedis()
     return
   }
 
-  const linearClient = createLinearAgentClient({ apiKey })
-
-  console.log('Creating new Linear agent session...')
-  const result = await linearClient.createAgentSessionOnIssue({
+  console.log('Creating new agent session...')
+  const result = await tracker.createAgentSessionOnIssue({
     issueId: session.issueId,
   })
 
   if (!result.success || !result.sessionId) {
-    console.error(`${C.red}Failed to create Linear agent session${C.reset}`)
+    console.error(`${C.red}Failed to create agent session${C.reset}`)
     await disconnectRedis()
     return
   }
 
   const newSessionId = result.sessionId
-  console.log(`New Linear session: ${newSessionId.slice(0, 12)}...`)
+  console.log(`New session: ${newSessionId.slice(0, 12)}...`)
 
   // Store a new Redis session state with the new Linear session ID,
   // preserving the existing state (worktree, worker, provider session, etc.)

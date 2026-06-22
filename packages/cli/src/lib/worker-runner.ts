@@ -18,6 +18,7 @@ import {
   type Logger,
 } from '@supaku/agentfactory'
 import type { AgentWorkType } from '@supaku/agentfactory-linear'
+import { createTrackerClient } from './tracker/index.js'
 
 // ---------------------------------------------------------------------------
 // Public config interface
@@ -622,6 +623,7 @@ export async function runWorker(
       // Create orchestrator with API activity proxy
       const orchestrator = createOrchestrator(
         {
+          tracker: createTrackerClient(),
           maxConcurrent: 1,
           worktreePath: path.resolve(gitRoot, '.worktrees'),
           apiActivityConfig: {

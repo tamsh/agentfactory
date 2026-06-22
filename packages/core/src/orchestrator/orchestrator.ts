@@ -34,10 +34,8 @@ import { createSessionLogger, type SessionLogger } from './session-logger.js'
 import { isSessionLoggingEnabled, isAutoAnalyzeEnabled, getLogAnalysisConfig } from './log-config.js'
 import type { WorktreeState, TodosState, TodoItem } from './state-types.js'
 import {
-  createLinearAgentClient,
   createAgentSession,
   buildCompletionComments,
-  type LinearAgentClient,
   type AgentSession,
   type AgentWorkType,
   type LinearWorkflowStatus,
@@ -69,6 +67,7 @@ import type {
   InjectMessageResult,
   SpawnAgentWithResumeOptions,
 } from './types.js'
+import type { IssueTrackerClient } from './issue-tracker-client.js'
 
 // Default inactivity timeout: 5 minutes
 const DEFAULT_INACTIVITY_TIMEOUT_MS = 300000
@@ -126,7 +125,35 @@ export function validateGitRemote(expectedRepo: string, cwd?: string): void {
   }
 }
 
-const DEFAULT_CONFIG: Required<Omit<OrchestratorConfig, 'linearApiKey' | 'project' | 'provider' | 'streamConfig' | 'apiActivityConfig' | 'workTypeTimeouts' | 'maxSessionTimeoutMs' | 'templateDir' | 'repository'>> & {
+/**
+ * Minimal structural shape of the raw Linear SDK client used by the Linear-only
+ * backlog scan. Declared inline so packages/core need not depend on @linear/sdk
+ * directly — the concrete client comes from IssueTrackerClient.getRawClient()
+ * (Linear). Only the fields/methods actually consumed are modeled.
+ */
+interface LinearRawClient {
+  projects(args: {
+    filter: { name: { eqIgnoreCase: string } }
+  }): Promise<{ nodes: Array<{ id: string }> }>
+  issues(args: {
+    filter: unknown
+    first: number
+  }): Promise<{
+    nodes: Array<{
+      id: string
+      identifier: string
+      title: string
+      description?: string | null
+      url: string
+      priority: number
+      labels(): Promise<{ nodes: Array<{ name: string }> }>
+      team: Promise<{ key?: string } | undefined>
+      project: Promise<{ name?: string } | undefined>
+    }>
+  }>
+}
+
+const DEFAULT_CONFIG: Required<Omit<OrchestratorConfig, 'tracker' | 'linearApiKey' | 'project' | 'provider' | 'streamConfig' | 'apiActivityConfig' | 'workTypeTimeouts' | 'maxSessionTimeoutMs' | 'templateDir' | 'repository'>> & {
   streamConfig: OrchestratorStreamConfig
   maxSessionTimeoutMs?: number
 } = {
@@ -477,24 +504,28 @@ function checkForIncompleteWork(worktreePath: string): IncompleteWorkCheck {
 function generatePromptForWorkType(
   identifier: string,
   workType: AgentWorkType,
-  options?: { parentContext?: string; mentionContext?: string; failureContext?: string }
+  options?: { parentContext?: string; mentionContext?: string; failureContext?: string; cliCommand?: string }
 ): string {
   // Use enriched parent context for QA/acceptance if provided
   if (options?.parentContext && (workType === 'qa' || workType === 'acceptance')) {
     return options.parentContext
   }
 
+  // Tracker CLI command, injected from .agentfactory/config.yaml (linearCli) or
+  // defaulting to the tracker-agnostic `pnpm af-issue` wrapper.
+  const cli = options?.cliCommand ?? 'pnpm af-issue'
+
   const LINEAR_CLI_INSTRUCTION = `
 
-LINEAR CLI (CRITICAL):
-Use the Linear CLI (\`pnpm af-linear\`) for ALL Linear operations. Do NOT use Linear MCP tools.
+ISSUE CLI (CRITICAL):
+Use the issue CLI (\`${cli}\`) for ALL issue-tracker operations. Do NOT use tracker MCP tools.
 See the project documentation (CLAUDE.md / AGENTS.md) for the full command reference.
 
 HUMAN-NEEDED BLOCKERS:
 If you encounter work that requires human action and cannot be resolved autonomously
 (e.g., missing API keys/credentials, infrastructure not provisioned, third-party onboarding,
 manual setup steps, policy decisions, access permissions), create a blocker issue:
-  pnpm af-linear create-blocker <SOURCE-ISSUE-ID> --title "What human needs to do" --description "Detailed steps"
+  ${cli} create-blocker <SOURCE-ISSUE-ID> --title "What human needs to do" --description "Detailed steps"
 This creates a tracked issue in Icebox with 'Needs Human' label, linked as blocking the source issue.
 Do NOT silently skip human-needed work or bury it in comments.
 Only create blockers for things that genuinely require a human — not for things you can retry or work around.`
@@ -603,18 +634,18 @@ then return to Backlog for re-implementation.${LINEAR_CLI_INSTRUCTION}`
 
 WORKFLOW:
 1. Read the QA/acceptance failure comments on ${identifier} to identify which sub-issues failed and why
-2. Fetch sub-issues: pnpm af-linear list-sub-issues ${identifier}
+2. Fetch sub-issues: ${cli} list-sub-issues ${identifier}
 3. For each FAILING sub-issue:
    a. Update its description with the specific failure feedback from the QA/acceptance report
-   b. Move it back to Backlog: pnpm af-linear update-sub-issue <id> --state Backlog --comment "Refinement: <failure summary>"
+   b. Move it back to Backlog: ${cli} update-sub-issue <id> --state Backlog --comment "Refinement: <failure summary>"
 4. Leave PASSING sub-issues in their current state (Finished) — do not re-run them
 5. Once all failing sub-issues are updated, the parent issue will be moved to Backlog by the orchestrator,
    which will trigger a coordination agent that picks up only the Backlog sub-issues for re-implementation.
 
 IMPORTANT CONSTRAINTS:
 - This is a REFINEMENT task — do NOT implement fixes yourself, only triage and route feedback to sub-issues.
-- NEVER run pnpm af-linear update-issue --state on the parent issue. The orchestrator manages parent status transitions.
-- Only use pnpm af-linear for: list-sub-issues, list-sub-issue-statuses, get-issue, list-comments, create-comment, update-sub-issue${LINEAR_CLI_INSTRUCTION}`
+- NEVER run ${cli} update-issue --state on the parent issue. The orchestrator manages parent status transitions.
+- Only use ${cli} for: list-sub-issues, list-sub-issue-statuses, get-issue, list-comments, create-comment, update-sub-issue${LINEAR_CLI_INSTRUCTION}`
       break
 
     case 'coordination':
@@ -625,13 +656,13 @@ and create a single PR with all changes when done.
 
 SUB-ISSUE STATUS MANAGEMENT:
 You MUST update sub-issue statuses in Linear as work progresses:
-- When starting work on a sub-issue: pnpm af-linear update-sub-issue <id> --state Started
-- When a sub-agent completes a sub-issue: pnpm af-linear update-sub-issue <id> --state Finished --comment "Completed by coordinator agent"
-- If a sub-agent fails on a sub-issue: pnpm af-linear create-comment <sub-issue-id> --body "Sub-agent failed: <reason>"
+- When starting work on a sub-issue: ${cli} update-sub-issue <id> --state Started
+- When a sub-agent completes a sub-issue: ${cli} update-sub-issue <id> --state Finished --comment "Completed by coordinator agent"
+- If a sub-agent fails on a sub-issue: ${cli} create-comment <sub-issue-id> --body "Sub-agent failed: <reason>"
 
 COMPLETION VERIFICATION:
 Before marking the parent issue as complete, verify ALL sub-issues are in Finished status:
-  pnpm af-linear list-sub-issue-statuses ${identifier}
+  ${cli} list-sub-issue-statuses ${identifier}
 If any sub-issue is not Finished, report the failure and do not mark the parent as complete.
 
 SUB-AGENT SAFETY RULES (CRITICAL):
@@ -664,7 +695,7 @@ See the "Working with Large Files" section in the project documentation (CLAUDE.
       basePrompt = `Coordinate QA across sub-issues for parent issue ${identifier}.
 
 WORKFLOW:
-1. Fetch sub-issues: pnpm af-linear list-sub-issues ${identifier}
+1. Fetch sub-issues: ${cli} list-sub-issues ${identifier}
 2. Create Claude Code Tasks for each sub-issue's QA verification
 3. Spawn qa-reviewer sub-agents in parallel \u2014 no dependency graph needed, all sub-issues are already Finished
 4. Each sub-agent: reads sub-issue requirements, runs scoped tests, validates implementation, emits pass/fail
@@ -713,7 +744,7 @@ See the "Working with Large Files" section in the project documentation (CLAUDE.
       basePrompt = `Coordinate acceptance across sub-issues for parent issue ${identifier}.
 
 WORKFLOW:
-1. Verify all sub-issues are in Delivered status: pnpm af-linear list-sub-issue-statuses ${identifier}
+1. Verify all sub-issues are in Delivered status: ${cli} list-sub-issue-statuses ${identifier}
 2. If any sub-issue is NOT Delivered, report which sub-issues need attention and fail
 3. Validate the PR:
    - CI checks are passing
@@ -721,7 +752,7 @@ WORKFLOW:
    - Preview deployment succeeded (if applicable)
 4. Merge the PR: gh pr merge <PR_NUMBER> --squash
 5. After merge succeeds, delete the remote branch: git push origin --delete <BRANCH_NAME>
-6. Bulk-update all sub-issues to Accepted: for each sub-issue, run pnpm af-linear update-sub-issue <id> --state Accepted
+6. Bulk-update all sub-issues to Accepted: for each sub-issue, run ${cli} update-sub-issue <id> --state Accepted
 7. Mark parent as complete (transitions to Accepted)
 
 IMPORTANT CONSTRAINTS:
@@ -789,7 +820,7 @@ export function getWorktreeIdentifier(
 }
 
 export class AgentOrchestrator {
-  private readonly config: Required<Omit<OrchestratorConfig, 'project' | 'provider' | 'streamConfig' | 'apiActivityConfig' | 'workTypeTimeouts' | 'maxSessionTimeoutMs' | 'templateDir' | 'repository'>> & {
+  private readonly config: Required<Omit<OrchestratorConfig, 'tracker' | 'linearApiKey' | 'project' | 'provider' | 'streamConfig' | 'apiActivityConfig' | 'workTypeTimeouts' | 'maxSessionTimeoutMs' | 'templateDir' | 'repository'>> & {
     project?: string
     repository?: string
     streamConfig: OrchestratorStreamConfig
@@ -797,7 +828,7 @@ export class AgentOrchestrator {
     workTypeTimeouts?: OrchestratorConfig['workTypeTimeouts']
     maxSessionTimeoutMs?: number
   }
-  private readonly client: LinearAgentClient
+  private readonly client: IssueTrackerClient
   private readonly events: OrchestratorEvents
   private readonly activeAgents: Map<string, AgentProcess> = new Map()
   private readonly agentHandles: Map<string, AgentHandle> = new Map()
@@ -836,9 +867,8 @@ export class AgentOrchestrator {
   private readonly toolRegistry: ToolRegistry
 
   constructor(config: OrchestratorConfig = {}, events: OrchestratorEvents = {}) {
-    const apiKey = config.linearApiKey ?? process.env.LINEAR_API_KEY
-    if (!apiKey) {
-      throw new Error('LINEAR_API_KEY is required')
+    if (!config.tracker) {
+      throw new Error('OrchestratorConfig.tracker (IssueTrackerClient) is required')
     }
 
     // Parse timeout config from environment variables (can be overridden by config)
@@ -852,7 +882,6 @@ export class AgentOrchestrator {
     this.config = {
       ...DEFAULT_CONFIG,
       ...config,
-      linearApiKey: apiKey,
       streamConfig: {
         ...DEFAULT_CONFIG.streamConfig,
         ...config.streamConfig,
@@ -868,7 +897,7 @@ export class AgentOrchestrator {
       validateGitRemote(this.config.repository)
     }
 
-    this.client = createLinearAgentClient({ apiKey })
+    this.client = config.tracker
     this.events = events
 
     // Initialize agent provider — defaults to Claude, configurable via env
@@ -889,7 +918,9 @@ export class AgentOrchestrator {
       this.templateRegistry = TemplateRegistry.create({
         templateDirs,
         useBuiltinDefaults: true,
-        frontend: 'linear',
+        // Frontend follows the injected tracker so template selection/rendering
+        // is tracker-aware (was hardcoded 'linear').
+        frontend: this.client.name,
       })
       this.templateRegistry.setToolPermissionAdapter(createToolPermissionAdapter(this.provider.name))
     } catch {
@@ -939,9 +970,13 @@ export class AgentOrchestrator {
       console.warn('[orchestrator] Failed to load .agentfactory/config.yaml:', err instanceof Error ? err.message : err)
     }
 
-    // Initialize tool plugin registry with Linear plugin
+    // Initialize tool plugin registry. The Linear tool plugin exposes
+    // Linear-specific in-process tools, so only register it when the injected
+    // tracker is Linear. GitHub deployments run without it.
     this.toolRegistry = new ToolRegistry()
-    this.toolRegistry.register(linearPlugin)
+    if (this.client.name === 'linear') {
+      this.toolRegistry.register(linearPlugin)
+    }
   }
 
   /**
@@ -986,6 +1021,18 @@ export class AgentOrchestrator {
   async getBacklogIssues(limit?: number): Promise<OrchestratorIssue[]> {
     const maxIssues = limit ?? this.config.maxConcurrent
 
+    // The rich backlog scan below relies on the raw Linear SDK (project repo
+    // metadata cross-check, per-issue description/url/priority). Those fields
+    // are not on the tracker-agnostic TrackerBacklogIssue surface, so for
+    // non-Linear trackers we fall back to listBacklogIssues().
+    // TODO(tracker-abstraction): widen TrackerBacklogIssue with
+    // description/url/priority/teamKey/projectName + a project repo-metadata
+    // hook so this whole method can drop the raw-SDK path.
+    const rawClient = this.client.getRawClient?.() as LinearRawClient | undefined
+    if (!rawClient) {
+      return this.getBacklogIssuesViaTracker(maxIssues)
+    }
+
     // Build filter based on project
     const filter: {
       state?: { name: { eqIgnoreCase: string } }
@@ -995,7 +1042,7 @@ export class AgentOrchestrator {
     }
 
     if (this.config.project) {
-      const projects = await this.client.linearClient.projects({
+      const projects = await rawClient.projects({
         filter: { name: { eqIgnoreCase: this.config.project } },
       })
       if (projects.nodes.length > 0) {
@@ -1030,7 +1077,7 @@ export class AgentOrchestrator {
       }
     }
 
-    const issues = await this.client.linearClient.issues({
+    const issues = await rawClient.issues({
       filter,
       first: maxIssues * 2, // Fetch extra to account for filtering
     })
@@ -1080,6 +1127,66 @@ export class AgentOrchestrator {
       const bPriority = b.priority || 5
       return aPriority - bPriority
     })
+  }
+
+  /**
+   * Raw Linear SDK client for the Linear-only agent-session streaming path, or
+   * null when the injected tracker has no agent-session concept (e.g. GitHub).
+   * Returns the type createAgentSession() expects so call sites stay type-safe.
+   */
+  private getRawAgentSessionClient(): Parameters<typeof createAgentSession>[0]['client'] | null {
+    const raw = this.client.getRawClient?.()
+    if (!raw) return null
+    return raw as Parameters<typeof createAgentSession>[0]['client']
+  }
+
+  /**
+   * Tracker-agnostic backlog scan via IssueTrackerClient.listBacklogIssues().
+   * Used when the tracker exposes no raw SDK (e.g. GitHub).
+   *
+   * Field gap vs. the Linear raw-SDK path: TrackerBacklogIssue has no
+   * description/url/priority/teamKey, so those are left empty/zero here and
+   * results are returned in the tracker's own order (no priority sort). This is
+   * sufficient for dispatch, which keys off id/identifier/labels.
+   */
+  private async getBacklogIssuesViaTracker(maxIssues: number): Promise<OrchestratorIssue[]> {
+    const project = this.config.project ?? ''
+    const backlog = await this.client.listBacklogIssues(project, maxIssues * 2)
+
+    const results: OrchestratorIssue[] = []
+    for (const issue of backlog) {
+      if (results.length >= maxIssues) break
+
+      // Honor allowedProjects filtering by the tracker's project name when set.
+      // TrackerBacklogIssue carries no project name, so we use the configured
+      // project (the only project this scan targets) for the membership check.
+      let resolvedProjectName: string | undefined = this.config.project
+      if (this.allowedProjects && this.allowedProjects.length > 0) {
+        if (!resolvedProjectName || !this.allowedProjects.includes(resolvedProjectName)) {
+          console.warn(
+            `[orchestrator] Skipping issue ${issue.identifier} — project "${resolvedProjectName ?? '(none)'}" is not in allowedProjects: [${this.allowedProjects.join(', ')}]`
+          )
+          continue
+        }
+      }
+      if (!resolvedProjectName && this.projectPaths) {
+        resolvedProjectName = this.config.project
+      }
+
+      results.push({
+        id: issue.id,
+        identifier: issue.identifier,
+        title: issue.title,
+        description: undefined,
+        url: '',
+        priority: 0,
+        labels: issue.labels,
+        teamName: undefined,
+        projectName: resolvedProjectName,
+      })
+    }
+
+    return results
   }
 
   /**
@@ -1842,16 +1949,16 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
         projectPath: this.projectPaths?.[projectName ?? ''],
         sharedPaths: this.sharedPaths,
         useToolPlugins: this.provider.name === 'claude',
-        linearCli: this.linearCli ?? 'pnpm af-linear',
+        linearCli: this.linearCli ?? 'pnpm af-issue',
         packageManager: this.packageManager ?? 'pnpm',
         buildCommand: this.buildCommand,
         testCommand: this.testCommand,
         validateCommand: this.validateCommand,
       }
       const rendered = this.templateRegistry.renderPrompt(workType, context)
-      prompt = rendered ?? generatePromptForWorkType(identifier, workType)
+      prompt = rendered ?? generatePromptForWorkType(identifier, workType, { cliCommand: this.linearCli })
     } else {
-      prompt = generatePromptForWorkType(identifier, workType)
+      prompt = generatePromptForWorkType(identifier, workType, { cliCommand: this.linearCli })
     }
 
     // Create logger for this agent
@@ -1966,27 +2073,36 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
         })
       } else {
         // Direct Linear API - only works with OAuth tokens (not API keys)
-        // This will fail for createAgentActivity calls but works for comments
-        const session = createAgentSession({
-          client: this.client.linearClient,
-          issueId,
-          sessionId,
-          autoTransition: false, // Orchestrator handles transitions
-        })
-        this.agentSessions.set(issueId, session)
+        // This will fail for createAgentActivity calls but works for comments.
+        // Agent-session streaming is Linear-only; trackers without a raw SDK
+        // (e.g. GitHub) have no agent-session concept, so skip streaming.
+        const rawClient = this.getRawAgentSessionClient()
+        if (rawClient) {
+          const session = createAgentSession({
+            client: rawClient,
+            issueId,
+            sessionId,
+            autoTransition: false, // Orchestrator handles transitions
+          })
+          this.agentSessions.set(issueId, session)
 
-        // Create ActivityEmitter with rate limiting
-        emitter = createActivityEmitter({
-          session,
-          minInterval: this.config.streamConfig.minInterval,
-          maxOutputLength: this.config.streamConfig.maxOutputLength,
-          includeTimestamps: this.config.streamConfig.includeTimestamps,
-          onActivityEmitted: (type, content) => {
-            log.activity(type, content)
-          },
-        })
+          // Create ActivityEmitter with rate limiting
+          emitter = createActivityEmitter({
+            session,
+            minInterval: this.config.streamConfig.minInterval,
+            maxOutputLength: this.config.streamConfig.maxOutputLength,
+            includeTimestamps: this.config.streamConfig.includeTimestamps,
+            onActivityEmitted: (type, content) => {
+              log.activity(type, content)
+            },
+          })
+        } else {
+          log.debug('Tracker has no agent-session support — skipping activity streaming')
+        }
       }
-      this.activityEmitters.set(issueId, emitter)
+      if (emitter) {
+        this.activityEmitters.set(issueId, emitter)
+      }
     }
 
     // Create AbortController for cancellation
@@ -2045,7 +2161,7 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     // Format: {issueIdentifier}-{WORKTYPE} (e.g., "SUP-123-DEV")
     env.CLAUDE_CODE_TASK_LIST_ID = worktreeIdentifier ?? `${identifier}-${WORK_TYPE_SUFFIX[workType]}`
 
-    // Set team name so agents can use `pnpm af-linear create-issue` without --team
+    // Set team name so agents can use `pnpm af-issue create-issue` without --team
     if (teamName) {
       env.LINEAR_TEAM_NAME = teamName
     }
@@ -2922,24 +3038,21 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     prompt?: string
   ): Promise<AgentProcess> {
     console.log(`Fetching issue:`, issueIdOrIdentifier)
-    const issue = await this.client.getIssue(issueIdOrIdentifier)
+    const issue = await this.client.getTrackerIssue(issueIdOrIdentifier)
     const identifier = issue.identifier
     const issueId = issue.id // Use the actual UUID
-    const team = await issue.team
-    const teamName = team?.key
+    const teamName = issue.teamKey
 
     // Resolve project name for path scoping in monorepos
     let projectName: string | undefined
     if (this.projectPaths) {
-      const project = await issue.project
-      projectName = project?.name
+      projectName = issue.projectName
     }
 
     console.log(`Processing single issue: ${identifier} (${issueId}) - ${issue.title}`)
 
     // Guard: skip work if the issue has moved to a terminal status since being queued
-    const currentState = await issue.state
-    const currentStatus = currentState?.name
+    const currentStatus = issue.statusName
     if (currentStatus && (TERMINAL_STATUSES as readonly string[]).includes(currentStatus)) {
       throw new Error(
         `Issue ${identifier} is in terminal status '${currentStatus}' — skipping ${workType ?? 'auto'} work. ` +
@@ -2956,8 +3069,7 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     // This must happen BEFORE creating worktree since path includes work type suffix
     let effectiveWorkType = workType
     if (!effectiveWorkType) {
-      const state = await issue.state
-      const statusName = state?.name ?? 'Backlog'
+      const statusName = issue.statusName ?? 'Backlog'
       effectiveWorkType = STATUS_WORK_TYPE_MAP[statusName] ?? 'development'
       console.log(`Auto-detected work type: ${effectiveWorkType} (from status: ${statusName})`)
 
@@ -3245,14 +3357,12 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     } else {
       // Need to fetch issue to get identifier
       try {
-        const issue = await this.client.getIssue(issueId)
+        const issue = await this.client.getTrackerIssue(issueId)
         identifier = issue.identifier
-        const issueTeam = await issue.team
-        teamName = issueTeam?.key
+        teamName = issue.teamKey
 
         // Guard: skip work if the issue has moved to a terminal status since being queued
-        const currentState = await issue.state
-        const currentStatus = currentState?.name
+        const currentStatus = issue.statusName
         if (currentStatus && (TERMINAL_STATUSES as readonly string[]).includes(currentStatus)) {
           console.log(`Issue ${identifier} is in terminal status '${currentStatus}' — skipping work`)
           return {
@@ -3527,7 +3637,7 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     this.events.onAgentStart?.(agent)
 
     // Set up activity streaming
-    let emitter: ActivityEmitter | ApiActivityEmitter
+    let emitter: ActivityEmitter | ApiActivityEmitter | null = null
 
     // Check if we should use API-based activity emitter (for remote workers)
     if (this.config.apiActivityConfig) {
@@ -3550,26 +3660,34 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
         },
       })
     } else {
-      // Direct Linear API
-      const session = createAgentSession({
-        client: this.client.linearClient,
-        issueId,
-        sessionId,
-        autoTransition: false,
-      })
-      this.agentSessions.set(issueId, session)
+      // Direct Linear API. Agent-session streaming is Linear-only; trackers
+      // without a raw SDK (e.g. GitHub) have no agent-session concept, so skip.
+      const rawClient = this.getRawAgentSessionClient()
+      if (rawClient) {
+        const session = createAgentSession({
+          client: rawClient,
+          issueId,
+          sessionId,
+          autoTransition: false,
+        })
+        this.agentSessions.set(issueId, session)
 
-      emitter = createActivityEmitter({
-        session,
-        minInterval: this.config.streamConfig.minInterval,
-        maxOutputLength: this.config.streamConfig.maxOutputLength,
-        includeTimestamps: this.config.streamConfig.includeTimestamps,
-        onActivityEmitted: (type, content) => {
-          log.activity(type, content)
-        },
-      })
+        emitter = createActivityEmitter({
+          session,
+          minInterval: this.config.streamConfig.minInterval,
+          maxOutputLength: this.config.streamConfig.maxOutputLength,
+          includeTimestamps: this.config.streamConfig.includeTimestamps,
+          onActivityEmitted: (type, content) => {
+            log.activity(type, content)
+          },
+        })
+      } else {
+        log.debug('Tracker has no agent-session support — skipping activity streaming')
+      }
     }
-    this.activityEmitters.set(issueId, emitter)
+    if (emitter) {
+      this.activityEmitters.set(issueId, emitter)
+    }
 
     // Create AbortController for cancellation
     const abortController = new AbortController()
@@ -3609,7 +3727,7 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
       LINEAR_SESSION_ID: sessionId,
       // Set work type so agent knows if it's doing QA or development work
       ...(workType && { LINEAR_WORK_TYPE: workType }),
-      // Set team name so agents can use `pnpm af-linear create-issue` without --team
+      // Set team name so agents can use `pnpm af-issue create-issue` without --team
       ...(teamName && { LINEAR_TEAM_NAME: teamName }),
     }
 
