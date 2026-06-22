@@ -129,7 +129,10 @@ export async function runWorker(
   const gitRoot = config.gitRoot ?? getGitRoot()
   const linearApiKey = config.linearApiKey ?? process.env.LINEAR_API_KEY
 
-  if (!linearApiKey && !process.env.GITHUB_REPO) {
+  if (
+    !linearApiKey &&
+    !(process.env.GITHUB_REPO && (process.env.GITHUB_TOKEN || process.env.GH_TOKEN))
+  ) {
     throw new Error(
       'A tracker must be configured — set LINEAR_API_KEY, or GITHUB_REPO + GITHUB_TOKEN'
     )

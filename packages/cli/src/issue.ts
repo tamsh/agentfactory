@@ -47,7 +47,11 @@ Usage:
 Commands:
   get-issue <id>                Get issue details
   create-comment <id> --body    Add a comment
-  update-issue <id> --state     Transition issue status
+  update-issue <id> --state     Transition issue status. Valid states:
+                                Backlog | Started | Finished | Delivered |
+                                Rejected | Icebox | Accepted | Canceled
+                                (these are the abstract status names, not the
+                                GitHub labels like "in-progress")
   get-comments <id>             List comments (alias: list-comments)
   check-blocked <id>            Check whether the issue is blocked
   help                          Show this help
@@ -90,7 +94,9 @@ async function runGitHub(argv: string[], repo: string, token: string): Promise<u
       return await client.getIssue(id)
     }
     default:
-      throw new Error(`af-issue: unsupported command for GitHub adapter: ${command}`)
+      throw new Error(
+        `af-issue: unsupported command "${command}" — run \`af-issue help\` for the command list`
+      )
   }
 }
 

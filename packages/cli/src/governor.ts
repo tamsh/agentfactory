@@ -161,6 +161,12 @@ async function main(): Promise<void> {
   if (githubRepo && githubToken) {
     const githubClient = createGitHubAgentClient({ token: githubToken, repo: githubRepo })
     log.info('Using GitHub Issues adapter for governor scan', { repo: githubRepo })
+    // Touchpoint storage powers holds/overrides (isHeld / getOverridePriority).
+    // Must be initialized on the GitHub path too, not just Linear.
+    if (redisUrl) {
+      redisConnected = true
+      initTouchpointStorage(new RedisOverrideStorage())
+    }
     dependencies = createRealDependencies({
       linearClient: githubClient as unknown as LinearAgentClient,
       generatePrompt: defaultGeneratePrompt,

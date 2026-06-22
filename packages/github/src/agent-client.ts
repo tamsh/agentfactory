@@ -241,7 +241,8 @@ export class GitHubAgentClient {
     const repo = this.resolveRepo(project)
 
     if (!TERMINAL_STATUSES.has(status) && !OPEN_STATUSES.has(status)) {
-      throw new Error(`updateIssueStatus: unknown status "${status}"`)
+      const valid = [...OPEN_STATUSES, ...TERMINAL_STATUSES].join(', ')
+      throw new Error(`updateIssueStatus: unknown status "${status}" — expected one of: ${valid}`)
     }
 
     if (TERMINAL_STATUSES.has(status)) {
