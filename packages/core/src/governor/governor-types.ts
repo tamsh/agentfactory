@@ -63,6 +63,12 @@ export interface GovernorConfig {
   enableAutoAcceptance: boolean
   /** Human response timeout in milliseconds (default: 4 hours) */
   humanResponseTimeoutMs: number
+  /**
+   * Labels that mark an issue as non-auto-dispatchable — e.g. `human` for
+   * human-only work, or `ios`/`android` for native work an agent can't do.
+   * Issues carrying any of these (case-insensitive) are skipped. Default: none.
+   */
+  skipLabels: string[]
   /** Top-of-funnel configuration overrides */
   topOfFunnel?: Partial<TopOfFunnelConfig>
 }
@@ -80,6 +86,7 @@ export const DEFAULT_GOVERNOR_CONFIG: GovernorConfig = {
   enableAutoQA: true,
   enableAutoAcceptance: true,
   humanResponseTimeoutMs: 4 * 60 * 60 * 1000, // 4 hours
+  skipLabels: [],
 }
 
 // ---------------------------------------------------------------------------

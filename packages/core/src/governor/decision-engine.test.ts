@@ -705,3 +705,31 @@ describe('decideAction — escalation strategy effects', () => {
     expect(decideAction(ctx).action).toBe('trigger-acceptance')
   })
 })
+
+describe('decideAction — skip labels', () => {
+  it('skips a Backlog issue carrying a skip label (case-insensitive)', () => {
+    const ctx = makeContext({
+      issue: makeIssue({ status: 'Backlog', labels: ['feature', 'IOS', 'P1-high'] }),
+      config: { ...DEFAULT_GOVERNOR_CONFIG, projects: ['p'], skipLabels: ['human', 'ios', 'android'] },
+    })
+    const result = decideAction(ctx)
+    expect(result.action).toBe('none')
+    expect(result.reason).toMatch(/skip label/i)
+  })
+
+  it('dispatches a Backlog issue with no skip label', () => {
+    const ctx = makeContext({
+      issue: makeIssue({ status: 'Backlog', labels: ['web', 'bug'] }),
+      config: { ...DEFAULT_GOVERNOR_CONFIG, projects: ['p'], skipLabels: ['human', 'ios', 'android'] },
+    })
+    expect(decideAction(ctx).action).toBe('trigger-development')
+  })
+
+  it('empty skipLabels disables filtering', () => {
+    const ctx = makeContext({
+      issue: makeIssue({ status: 'Backlog', labels: ['ios', 'human'] }),
+      config: { ...DEFAULT_GOVERNOR_CONFIG, projects: ['p'], skipLabels: [] },
+    })
+    expect(decideAction(ctx).action).toBe('trigger-development')
+  })
+})

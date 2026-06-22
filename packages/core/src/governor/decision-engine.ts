@@ -94,6 +94,18 @@ export function decideAction(ctx: DecisionContext): DecisionResult {
     return { action: 'none', reason: `Issue ${issue.identifier} is held (HOLD override active)` }
   }
 
+  // --- Skip-label filter ---
+  // Project-configured labels marking an issue as non-auto-dispatchable
+  // (e.g. `human` for human-only, `ios`/`android` for native work a code agent
+  // cannot do). Case-insensitive.
+  if (config.skipLabels?.length) {
+    const skip = new Set(config.skipLabels.map((l) => l.toLowerCase()))
+    const hit = issue.labels.find((l) => skip.has(l.toLowerCase()))
+    if (hit) {
+      return { action: 'none', reason: `Issue ${issue.identifier} has skip label '${hit}'` }
+    }
+  }
+
   // --- Circuit breaker ---
   // Prevent issues from cycling through agents indefinitely.
   // If an issue has had too many sessions without reaching a terminal status,
