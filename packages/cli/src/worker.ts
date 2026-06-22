@@ -125,8 +125,10 @@ if (!cliArgs.apiKey) {
   process.exit(1)
 }
 
-if (!process.env.LINEAR_API_KEY) {
-  console.error('Error: LINEAR_API_KEY environment variable is required')
+if (!process.env.LINEAR_API_KEY && !process.env.GITHUB_REPO) {
+  console.error(
+    'Error: a tracker must be configured — set LINEAR_API_KEY, or GITHUB_REPO + GITHUB_TOKEN'
+  )
   process.exit(1)
 }
 

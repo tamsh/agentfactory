@@ -61,7 +61,7 @@ describe('priorityFromIssue', () => {
 })
 
 describe('childCountFromIssue', () => {
-  it('uses sub_issues_summary.total when present', () => {
+  it('uses sub_issues_summary.total when it reports children', () => {
     expect(
       childCountFromIssue(issue({ sub_issues_summary: { total: 4, completed: 1, percent_completed: 25 } }))
     ).toBe(4)
@@ -69,6 +69,24 @@ describe('childCountFromIssue', () => {
   it('falls back to the epic label convention', () => {
     expect(childCountFromIssue(issue({ labels: [{ name: 'epic' }] }))).toBe(1)
     expect(childCountFromIssue(issue({ labels: [{ name: 'web' }] }))).toBe(0)
+  })
+  it('an empty native summary (total 0) still honors the epic label', () => {
+    expect(
+      childCountFromIssue(
+        issue({
+          labels: [{ name: 'epic' }],
+          sub_issues_summary: { total: 0, completed: 0, percent_completed: 0 },
+        })
+      )
+    ).toBe(1)
+    expect(
+      childCountFromIssue(
+        issue({
+          labels: [{ name: 'web' }],
+          sub_issues_summary: { total: 0, completed: 0, percent_completed: 0 },
+        })
+      )
+    ).toBe(0)
   })
 })
 

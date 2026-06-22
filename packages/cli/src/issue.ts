@@ -30,7 +30,11 @@ import { runLinear, parseLinearArgs } from './lib/linear-runner.js'
 
 function getFlag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(`--${name}`)
-  return i >= 0 ? argv[i + 1] : undefined
+  if (i < 0) return undefined
+  const val = argv[i + 1]
+  // Guard against consuming the next flag as this flag's value.
+  if (val === undefined || val.startsWith('--')) return undefined
+  return val
 }
 
 function printHelp(): void {
@@ -99,6 +103,14 @@ async function main(): Promise<void> {
 
   const repo = process.env.GITHUB_REPO
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN
+
+  // GITHUB_REPO set but no token → fail clearly instead of silently falling
+  // through to the Linear path (which would surface a confusing "Linear" error).
+  if (repo && !token) {
+    throw new Error(
+      'GITHUB_REPO is set but no GitHub token found — set GITHUB_TOKEN or GH_TOKEN.'
+    )
+  }
 
   if (repo && token) {
     const output = await runGitHub(argv, repo, token)

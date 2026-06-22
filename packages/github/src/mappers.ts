@@ -69,9 +69,10 @@ export function priorityFromIssue(issue: GitHubRestIssue): number {
  * `epic` label convention (GitHub REST does not expose sub-issues uniformly).
  */
 export function childCountFromIssue(issue: GitHubRestIssue): number {
-  if (issue.sub_issues_summary && typeof issue.sub_issues_summary.total === 'number') {
-    return issue.sub_issues_summary.total
-  }
+  const nativeTotal = issue.sub_issues_summary?.total
+  // Only trust the native summary when it actually reports children; an enabled-
+  // but-empty summary (total: 0) must still fall through to the epic-label check.
+  if (typeof nativeTotal === 'number' && nativeTotal > 0) return nativeTotal
   return labelNames(issue).some((n) => n.toLowerCase() === 'epic') ? 1 : 0
 }
 
