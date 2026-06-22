@@ -19,6 +19,7 @@ import {
   createProvider,
   resolveProviderName,
 } from '@supaku/agentfactory'
+import { createTrackerClient } from '@supaku/agentfactory-cli/tracker'
 
 const project = process.argv[2]
 if (!project) {
@@ -41,6 +42,7 @@ async function main() {
   // Create orchestrator — provider is resolved per-agent
   // based on the work type and project of each issue
   const orchestrator = createOrchestrator({
+    tracker: createTrackerClient(),
     project,
     maxConcurrent: 3,
     worktreePath: '.worktrees',

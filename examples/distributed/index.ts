@@ -24,6 +24,7 @@ import {
   createWorkerStorage,
 } from '@supaku/agentfactory-server'
 import { createOrchestrator } from '@supaku/agentfactory'
+import { createTrackerClient } from '@supaku/agentfactory-cli/tracker'
 
 const role = process.argv[2] as 'coordinator' | 'worker'
 const issueId = process.argv[3]
@@ -95,6 +96,7 @@ async function runWorker() {
 
   // Run the agent locally
   const orchestrator = createOrchestrator({
+    tracker: createTrackerClient(),
     maxConcurrent: 1,
     worktreePath: '.worktrees',
   })

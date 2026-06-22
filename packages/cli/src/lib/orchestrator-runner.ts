@@ -20,8 +20,12 @@ import { createTrackerClient } from './tracker/index.js'
 // ---------------------------------------------------------------------------
 
 export interface OrchestratorRunnerConfig {
-  /** Linear API key for authentication */
-  linearApiKey: string
+  /**
+   * Deprecated/no-op: authentication is handled by the injected tracker
+   * (createTrackerClient() reads its own credentials from the environment).
+   * Kept optional for backwards-compatible call sites; not forwarded.
+   */
+  linearApiKey?: string
   /** Filter issues by project name */
   project?: string
   /** Maximum concurrent agents (default: 3) */
@@ -142,7 +146,6 @@ export async function runOrchestrator(
     project: config.project,
     maxConcurrent,
     worktreePath: path.resolve(gitRoot, '.worktrees'),
-    linearApiKey: config.linearApiKey,
   }
   if (config.templateDir) {
     orchestratorConfig.templateDir = config.templateDir

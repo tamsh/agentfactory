@@ -12,6 +12,7 @@
  */
 
 import { createOrchestrator } from '@supaku/agentfactory'
+import { createTrackerClient } from '@supaku/agentfactory-cli/tracker'
 
 const issueId = process.argv[2]
 if (!issueId) {
@@ -23,6 +24,10 @@ if (!issueId) {
 async function main() {
   // Create an orchestrator with sensible defaults
   const orchestrator = createOrchestrator({
+    // The orchestrator requires an injected issue tracker. createTrackerClient()
+    // picks GitHub (GITHUB_REPO + GITHUB_TOKEN) or Linear (LINEAR_API_KEY) from
+    // the environment.
+    tracker: createTrackerClient(),
     maxConcurrent: 1,
     worktreePath: '.worktrees',
     inactivityTimeoutMs: 300_000, // 5 minutes
