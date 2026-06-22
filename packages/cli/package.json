@@ -90,6 +90,7 @@
     "af-queue-admin": "./dist/src/queue-admin.js",
     "af-analyze-logs": "./dist/src/analyze-logs.js",
     "af-linear": "./dist/src/linear.js",
+    "af-issue": "./dist/src/issue.js",
     "af-governor": "./dist/src/governor.js",
     "af-sync-routes": "./dist/src/sync-routes.js"
   },
@@ -155,6 +156,7 @@
   ],
   "dependencies": {
     "@supaku/agentfactory": "workspace:*",
+    "@supaku/agentfactory-github": "workspace:*",
     "@supaku/agentfactory-linear": "workspace:*",
     "@supaku/agentfactory-server": "workspace:*",
     "dotenv": "^17.2.3"

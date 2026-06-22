@@ -1,0 +1,29 @@
+{
+  "name": "@supaku/agentfactory-github",
+  "version": "0.7.58",
+  "type": "module",
+  "description": "GitHub Issues integration for AgentFactory — scan, status transitions, comments, work routing",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.4",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.3"
+  }
+}
