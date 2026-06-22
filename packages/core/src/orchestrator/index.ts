@@ -15,6 +15,13 @@ export type {
   AgentWorkResult,
 } from './types.js'
 
+// Tracker abstraction (tracker-agnostic dispatch)
+export type {
+  IssueTrackerClient,
+  TrackerIssue,
+  TrackerBacklogIssue,
+} from './issue-tracker-client.js'
+
 // Stream Parser Types
 export type {
   ClaudeStreamEvent,
