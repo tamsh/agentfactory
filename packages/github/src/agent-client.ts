@@ -287,7 +287,11 @@ export class GitHubAgentClient {
     issueId: string | number
     note?: string
   }): Promise<{ success: boolean; sessionId: string }> {
-    return { success: true, sessionId: `gh:${this.defaultRepo}#${input.issueId}` }
+    // URL-safe id: the session id is interpolated into worker API paths
+    // (/api/sessions/{id}/claim), so it must not contain `/` or `#`. Keep the
+    // issue number in it (agent-runner matches sessions by substring).
+    const repoSlug = this.defaultRepo.replace(/\//g, '-')
+    return { success: true, sessionId: `gh-${repoSlug}-${input.issueId}` }
   }
 }
 
