@@ -44,6 +44,8 @@ export interface GovernorRunnerConfig {
   enableAutoQA?: boolean
   /** Enable auto-acceptance from Delivered (default: true) */
   enableAutoAcceptance?: boolean
+  /** Labels that mark an issue as non-auto-dispatchable (skipped, case-insensitive) */
+  skipLabels?: string[]
   /** Run a single scan pass and exit (for testing / cron) */
   once?: boolean
   /** Dependency injection for the governor (required) */
@@ -98,6 +100,7 @@ export async function runGovernor(
     enableAutoDevelopment: config.enableAutoDevelopment,
     enableAutoQA: config.enableAutoQA,
     enableAutoAcceptance: config.enableAutoAcceptance,
+    skipLabels: config.skipLabels,
   }
 
   const mode = config.mode ?? 'poll-only'
@@ -119,6 +122,7 @@ export async function runGovernor(
         enableAutoDevelopment: config.enableAutoDevelopment ?? true,
         enableAutoQA: config.enableAutoQA ?? true,
         enableAutoAcceptance: config.enableAutoAcceptance ?? true,
+        skipLabels: config.skipLabels ?? [],
         humanResponseTimeoutMs: 4 * 60 * 60 * 1000,
         eventBus,
         deduplicator,
@@ -160,6 +164,7 @@ export interface GovernorCLIArgs {
   enableAutoDevelopment: boolean
   enableAutoQA: boolean
   enableAutoAcceptance: boolean
+  skipLabels: string[]
   once: boolean
   mode: 'poll-only' | 'event-driven'
   autoUpdate?: boolean
@@ -197,6 +202,7 @@ export function parseGovernorArgs(argv: string[] = process.argv.slice(2)): Gover
     enableAutoDevelopment: true,
     enableAutoQA: true,
     enableAutoAcceptance: true,
+    skipLabels: [],
     once: false,
     mode: 'poll-only',
   }
@@ -233,6 +239,12 @@ export function parseGovernorArgs(argv: string[] = process.argv.slice(2)): Gover
         break
       case '--no-auto-acceptance':
         result.enableAutoAcceptance = false
+        break
+      case '--skip-labels':
+        result.skipLabels = (argv[++i] ?? '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
         break
       case '--auto-update':
         result.autoUpdate = true

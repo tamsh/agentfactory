@@ -315,6 +315,7 @@ async function main(): Promise<void> {
     enableAutoDevelopment: args.enableAutoDevelopment,
     enableAutoQA: args.enableAutoQA,
     enableAutoAcceptance: args.enableAutoAcceptance,
+    skipLabels: args.skipLabels,
     once: args.once,
     mode: args.mode,
     dependencies,
