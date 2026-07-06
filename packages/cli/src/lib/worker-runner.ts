@@ -107,6 +107,17 @@ function getGitRoot(): string {
   }
 }
 
+/**
+ * Milestone progress updates are posted as Linear agent-session activities via
+ * the coordinator API (`POST /api/sessions/:id/progress`). Non-Linear trackers
+ * (e.g. GitHub) have no agent session — their issue comments and status
+ * transitions are posted directly by the orchestrator via the injected tracker
+ * client — so the Linear-bound coordinator round-trip is skipped for them.
+ */
+export function shouldForwardProgressToCoordinator(trackerName: string): boolean {
+  return trackerName === 'linear'
+}
+
 const MAX_HEARTBEAT_FAILURES = 3
 
 // ---------------------------------------------------------------------------
@@ -138,6 +149,11 @@ export async function runWorker(
       'A tracker must be configured — set LINEAR_API_KEY, or GITHUB_REPO + GITHUB_TOKEN'
     )
   }
+
+  // Select the issue tracker once and reuse it for every orchestrator so the
+  // worker can also gate tracker-specific behavior (e.g. Linear-only progress
+  // posting) off its name. The adapters are stateless, so sharing is safe.
+  const tracker = createTrackerClient()
 
   // -----------------------------------------------------------------------
   // State (formerly globals)
@@ -503,6 +519,15 @@ export async function runWorker(
   ): Promise<void> {
     if (!workerId) return
 
+    // Progress activities are a Linear-only concept. For other trackers the
+    // coordinator has no agent session to post to (it would fail with
+    // "Failed to post to Linear"), and the orchestrator already writes issue
+    // comments + status transitions directly via the tracker client.
+    if (!shouldForwardProgressToCoordinator(tracker.name)) {
+      log.debug(`Skipping progress post for ${tracker.name} tracker: ${milestone}`)
+      return
+    }
+
     const result = await apiRequest<{ posted: boolean; reason?: string }>(
       `/api/sessions/${sessionId}/progress`,
       {
@@ -623,7 +648,7 @@ export async function runWorker(
       // Create orchestrator with API activity proxy
       const orchestrator = createOrchestrator(
         {
-          tracker: createTrackerClient(),
+          tracker,
           maxConcurrent: 1,
           worktreePath: path.resolve(gitRoot, '.worktrees'),
           apiActivityConfig: {

@@ -805,6 +805,23 @@ const WORK_TYPE_SUFFIX: Record<AgentWorkType, string> = {
 }
 
 /**
+ * Sanitize an issue identifier so it is safe to use as a git branch name and
+ * worktree directory. Linear identifiers (e.g. "SUP-294") are already valid git
+ * refs and pass through unchanged. GitHub identifiers (e.g. "#204") are not —
+ * the leading `#` is stripped and prefixed to keep the ref unique and readable
+ * (e.g. "#204" → "gh-204"). Any other ref-unsafe characters collapse to `-`.
+ *
+ * The `#`-prefixed form is preserved elsewhere as the human-facing display
+ * identifier; only git refs use this sanitized form.
+ */
+export function sanitizeGitRef(issueIdentifier: string): string {
+  const stripped = issueIdentifier.startsWith('#')
+    ? `gh-${issueIdentifier.slice(1)}`
+    : issueIdentifier
+  return stripped.replace(/[^A-Za-z0-9._/-]/g, '-')
+}
+
+/**
  * Generate a worktree identifier that includes the work type suffix
  *
  * @param issueIdentifier - Issue identifier (e.g., "SUP-294")
@@ -816,7 +833,7 @@ export function getWorktreeIdentifier(
   workType: AgentWorkType
 ): string {
   const suffix = WORK_TYPE_SUFFIX[workType]
-  return `${issueIdentifier}-${suffix}`
+  return `${sanitizeGitRef(issueIdentifier)}-${suffix}`
 }
 
 export class AgentOrchestrator {
@@ -1141,6 +1158,18 @@ export class AgentOrchestrator {
     const raw = this.client.getRawClient?.()
     if (!raw) return null
     return raw as Parameters<typeof createAgentSession>[0]['client']
+  }
+
+  /**
+   * The remote-worker activity proxy (`apiActivityConfig`) posts to coordinator
+   * endpoints that speak Linear only (agent activities, completion, external
+   * URLs). Returns the config when it is present AND the tracker is Linear —
+   * otherwise `undefined`, so callers fall back to posting directly via
+   * `this.client`. Every coordinator call must gate on this single predicate so
+   * a new posting site cannot silently re-leak to Linear for non-Linear trackers.
+   */
+  private linearCoordinatorConfig(): OrchestratorConfig['apiActivityConfig'] | undefined {
+    return this.client.name === 'linear' ? this.config.apiActivityConfig : undefined
   }
 
   /**
@@ -1504,8 +1533,10 @@ export class AgentOrchestrator {
   ): { worktreePath: string; worktreeIdentifier: string } {
     const worktreeIdentifier = getWorktreeIdentifier(issueIdentifier, workType)
     const worktreePath = resolve(this.config.worktreePath, worktreeIdentifier)
-    // Use issue identifier for branch name (shared across work types)
-    const branchName = issueIdentifier
+    // Use the sanitized issue identifier for the branch name (shared across work
+    // types). GitHub identifiers like "#204" aren't valid git refs; sanitizeGitRef
+    // maps them to a safe form (e.g. "gh-204") while Linear ids pass through.
+    const branchName = sanitizeGitRef(issueIdentifier)
 
     // Ensure parent directory exists
     const parentDir = resolve(this.config.worktreePath)
@@ -2062,10 +2093,12 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     let emitter: ActivityEmitter | ApiActivityEmitter | null = null
 
     if (shouldStream && sessionId) {
-      // Check if we should use API-based activity emitter (for remote workers)
-      // This proxies activities through the agent app which has OAuth tokens
-      if (this.config.apiActivityConfig) {
-        const { baseUrl, apiKey, workerId } = this.config.apiActivityConfig
+      // Use the API-based activity emitter (for remote workers) only for Linear;
+      // non-Linear trackers (e.g. GitHub) have no agent-session concept and fall
+      // through to the skip path below.
+      const coordinatorConfig = this.linearCoordinatorConfig()
+      if (coordinatorConfig) {
+        const { baseUrl, apiKey, workerId } = coordinatorConfig
         log.debug('Using API activity emitter', { baseUrl })
 
         emitter = createApiActivityEmitter({
@@ -2809,9 +2842,12 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
   ): Promise<void> {
     const log = this.agentLoggers.get(agent.issueId)
 
-    // If using API activity config, call the API endpoint
-    if (this.config.apiActivityConfig) {
-      const { baseUrl, apiKey } = this.config.apiActivityConfig
+    // The external-urls endpoint targets the Linear-bound coordinator, so it is
+    // Linear-only. For non-Linear trackers the PR URL is surfaced via the
+    // completion comment instead (see postCompletionComment).
+    const coordinatorConfig = this.linearCoordinatorConfig()
+    if (coordinatorConfig) {
+      const { baseUrl, apiKey } = coordinatorConfig
       try {
         const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/external-urls`, {
           method: 'POST',
@@ -2873,9 +2909,12 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
       totalLength: resultMessage.length,
     })
 
-    // If using API activity config, call the API endpoint
-    if (this.config.apiActivityConfig) {
-      const { baseUrl, apiKey } = this.config.apiActivityConfig
+    // The completion endpoint targets the Linear-bound coordinator, so it is
+    // Linear-only. Non-Linear trackers (e.g. GitHub) post the completion comment
+    // directly via the injected tracker client in the branch below.
+    const coordinatorConfig = this.linearCoordinatorConfig()
+    if (coordinatorConfig) {
+      const { baseUrl, apiKey } = coordinatorConfig
       try {
         const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/completion`, {
           method: 'POST',
@@ -3651,9 +3690,11 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     // Set up activity streaming
     let emitter: ActivityEmitter | ApiActivityEmitter | null = null
 
-    // Check if we should use API-based activity emitter (for remote workers)
-    if (this.config.apiActivityConfig) {
-      const { baseUrl, apiKey, workerId } = this.config.apiActivityConfig
+    // Use the API-based activity emitter (for remote workers) only for Linear;
+    // non-Linear trackers (e.g. GitHub) fall through to the skip path below.
+    const coordinatorConfig = this.linearCoordinatorConfig()
+    if (coordinatorConfig) {
+      const { baseUrl, apiKey, workerId } = coordinatorConfig
       log.debug('Using API activity emitter', { baseUrl })
 
       emitter = createApiActivityEmitter({
