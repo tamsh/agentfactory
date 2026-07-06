@@ -1161,6 +1161,18 @@ export class AgentOrchestrator {
   }
 
   /**
+   * The remote-worker activity proxy (`apiActivityConfig`) posts to coordinator
+   * endpoints that speak Linear only (agent activities, completion, external
+   * URLs). Returns the config when it is present AND the tracker is Linear —
+   * otherwise `undefined`, so callers fall back to posting directly via
+   * `this.client`. Every coordinator call must gate on this single predicate so
+   * a new posting site cannot silently re-leak to Linear for non-Linear trackers.
+   */
+  private linearCoordinatorConfig(): OrchestratorConfig['apiActivityConfig'] | undefined {
+    return this.client.name === 'linear' ? this.config.apiActivityConfig : undefined
+  }
+
+  /**
    * Tracker-agnostic backlog scan via IssueTrackerClient.listBacklogIssues().
    * Used when the tracker exposes no raw SDK (e.g. GitHub).
    *
@@ -2081,12 +2093,12 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     let emitter: ActivityEmitter | ApiActivityEmitter | null = null
 
     if (shouldStream && sessionId) {
-      // Check if we should use API-based activity emitter (for remote workers).
-      // This proxies activities through the agent app, which speaks Linear only —
-      // so it is Linear-exclusive. Non-Linear trackers (e.g. GitHub) have no
-      // agent-session concept and fall through to the skip path below.
-      if (this.config.apiActivityConfig && this.client.name === 'linear') {
-        const { baseUrl, apiKey, workerId } = this.config.apiActivityConfig
+      // Use the API-based activity emitter (for remote workers) only for Linear;
+      // non-Linear trackers (e.g. GitHub) have no agent-session concept and fall
+      // through to the skip path below.
+      const coordinatorConfig = this.linearCoordinatorConfig()
+      if (coordinatorConfig) {
+        const { baseUrl, apiKey, workerId } = coordinatorConfig
         log.debug('Using API activity emitter', { baseUrl })
 
         emitter = createApiActivityEmitter({
@@ -2833,8 +2845,9 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     // The external-urls endpoint targets the Linear-bound coordinator, so it is
     // Linear-only. For non-Linear trackers the PR URL is surfaced via the
     // completion comment instead (see postCompletionComment).
-    if (this.config.apiActivityConfig && this.client.name === 'linear') {
-      const { baseUrl, apiKey } = this.config.apiActivityConfig
+    const coordinatorConfig = this.linearCoordinatorConfig()
+    if (coordinatorConfig) {
+      const { baseUrl, apiKey } = coordinatorConfig
       try {
         const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/external-urls`, {
           method: 'POST',
@@ -2899,8 +2912,9 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     // The completion endpoint targets the Linear-bound coordinator, so it is
     // Linear-only. Non-Linear trackers (e.g. GitHub) post the completion comment
     // directly via the injected tracker client in the branch below.
-    if (this.config.apiActivityConfig && this.client.name === 'linear') {
-      const { baseUrl, apiKey } = this.config.apiActivityConfig
+    const coordinatorConfig = this.linearCoordinatorConfig()
+    if (coordinatorConfig) {
+      const { baseUrl, apiKey } = coordinatorConfig
       try {
         const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/completion`, {
           method: 'POST',
@@ -3676,11 +3690,11 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
     // Set up activity streaming
     let emitter: ActivityEmitter | ApiActivityEmitter | null = null
 
-    // Check if we should use API-based activity emitter (for remote workers).
-    // The proxy speaks Linear only, so it is Linear-exclusive; non-Linear
-    // trackers (e.g. GitHub) fall through to the skip path below.
-    if (this.config.apiActivityConfig && this.client.name === 'linear') {
-      const { baseUrl, apiKey, workerId } = this.config.apiActivityConfig
+    // Use the API-based activity emitter (for remote workers) only for Linear;
+    // non-Linear trackers (e.g. GitHub) fall through to the skip path below.
+    const coordinatorConfig = this.linearCoordinatorConfig()
+    if (coordinatorConfig) {
+      const { baseUrl, apiKey, workerId } = coordinatorConfig
       log.debug('Using API activity emitter', { baseUrl })
 
       emitter = createApiActivityEmitter({
