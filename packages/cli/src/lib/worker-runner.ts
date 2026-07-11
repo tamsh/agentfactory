@@ -846,7 +846,10 @@ export async function runWorker(
       const results = await orchestrator.waitForAll()
       let agent = results[0]
 
-      clearInterval(stopChecker)
+      // NOTE: the stopChecker interval is intentionally left running through the
+      // auto-continue retries below (it self-clears when a stop is detected) so a
+      // user stop during a multi-minute retry isn't lost. It is torn down after
+      // the loop.
 
       // Auto-continue delivery: a code work type that finished without opening a
       // PR is demoted to 'incomplete' (reason 'no_pr_created') by the orchestrator,
@@ -901,9 +904,18 @@ export async function runWorker(
         agent = retryResults[0] ?? agent
       }
 
-      // If delivery still failed after retries, post a single diagnostic comment
-      // to the issue (the orchestrator stays silent to avoid duplicate comments).
-      if (agent?.status === 'incomplete' && isMissingRequiredPr(work.workType, agent.pullRequestUrl)) {
+      // Retries are done — stop watching for the stop signal.
+      clearInterval(stopChecker)
+
+      // If we actually attempted delivery and it still failed, post a single
+      // diagnostic comment (the orchestrator stays silent to avoid duplicates).
+      // Skip when no attempts ran (e.g. worker shutdown / user stop) — that's an
+      // interruption, not a delivery failure.
+      if (
+        deliveryAttempts > 0 &&
+        agent?.status === 'incomplete' &&
+        isMissingRequiredPr(work.workType, agent.pullRequestUrl)
+      ) {
         try {
           await tracker.createComment(
             work.issueIdentifier,
