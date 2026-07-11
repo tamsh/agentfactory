@@ -501,7 +501,7 @@ function checkForIncompleteWork(worktreePath: string): IncompleteWorkCheck {
  *   to include sub-issue context and holistic validation instructions.
  * @returns The appropriate prompt for the work type
  */
-function generatePromptForWorkType(
+export function generatePromptForWorkType(
   identifier: string,
   workType: AgentWorkType,
   options?: { parentContext?: string; mentionContext?: string; failureContext?: string; cliCommand?: string }
@@ -529,6 +529,29 @@ manual setup steps, policy decisions, access permissions), create a blocker issu
 This creates a tracked issue in Icebox with 'Needs Human' label, linked as blocking the source issue.
 Do NOT silently skip human-needed work or bury it in comments.
 Only create blockers for things that genuinely require a human — not for things you can retry or work around.`
+
+  // Appended to code-producing work types. Without this, agents implement the
+  // change but never commit/push/open a PR, so the issue advances with no
+  // deliverable. The orchestrator detects the PR URL from the agent's final
+  // message (see extractPullRequestUrl) — so the agent MUST emit it. Code lives
+  // on GitHub for both trackers, so `gh pr create` is the tracker-agnostic path.
+  const PR_DELIVERY_INSTRUCTION = `
+
+DELIVERING YOUR WORK (REQUIRED):
+Your work is only complete when it is shipped as a pull request. After the
+implementation is done and tests + type-checks pass:
+1. Commit all your changes on the current branch (already checked out for you)
+   with a message referencing the issue, e.g. "fix: <summary> (${identifier})".
+   Do NOT commit the .agent/ directory.
+2. Push the current branch: git push -u origin HEAD
+3. Open a pull request against the default branch, referencing the issue in the
+   body (e.g. "Closes ${identifier}"): gh pr create --fill
+   If a pull request already exists for this branch, skip creation — your push
+   updated it — and just report its URL.
+4. Include the resulting pull request URL verbatim in your final message so the
+   orchestrator can link it to the issue.
+Do NOT merge the PR, and do NOT run git checkout / git switch / git worktree —
+only commit, push, and open the PR on the current branch.`
 
   let basePrompt: string
   switch (workType) {
@@ -564,7 +587,7 @@ IMPORTANT: If you encounter "exceeds maximum allowed tokens" error when reading 
 - Use Grep to search for specific code patterns instead of reading entire files
 - Use Read with offset/limit parameters to paginate through large files
 - Avoid reading auto-generated files like payload-types.ts (use Grep instead)
-See the "Working with Large Files" section in the project documentation (CLAUDE.md / AGENTS.md) for details.${LINEAR_CLI_INSTRUCTION}`
+See the "Working with Large Files" section in the project documentation (CLAUDE.md / AGENTS.md) for details.${LINEAR_CLI_INSTRUCTION}${PR_DELIVERY_INSTRUCTION}`
       break
 
     case 'inflight':
@@ -580,7 +603,7 @@ IMPORTANT: If you encounter "exceeds maximum allowed tokens" error when reading 
 - Use Grep to search for specific code patterns instead of reading entire files
 - Use Read with offset/limit parameters to paginate through large files
 - Avoid reading auto-generated files like payload-types.ts (use Grep instead)
-See the "Working with Large Files" section in the project documentation (CLAUDE.md / AGENTS.md) for details.${LINEAR_CLI_INSTRUCTION}`
+See the "Working with Large Files" section in the project documentation (CLAUDE.md / AGENTS.md) for details.${LINEAR_CLI_INSTRUCTION}${PR_DELIVERY_INSTRUCTION}`
       break
 
     case 'qa':
