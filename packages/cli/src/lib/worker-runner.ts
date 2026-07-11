@@ -12,6 +12,7 @@ import os from 'os'
 import {
   createOrchestrator,
   createLogger,
+  isMissingRequiredPr,
   type AgentProcess,
   type OrchestratorIssue,
   type AgentOrchestrator,
@@ -852,12 +853,16 @@ export async function runWorker(
       // which preserves the worktree. Re-prompt the same session — same worktree,
       // same provider session — to commit, push, and open the PR. If the agent
       // now produces a PR, the orchestrator promotes it normally on the next pass.
+      // Key off isMissingRequiredPr (code work type + no PR), NOT incompleteReason:
+      // the orchestrator's cleanup pass overwrites the reason with a lower-level
+      // symptom (e.g. 'uncommitted_changes'), and this also covers committed-but-
+      // unpushed or pushed-but-no-PR finishes.
       let deliveryAttempts = 0
       while (
         running &&
         !stopRequested &&
         agent?.status === 'incomplete' &&
-        agent.incompleteReason === 'no_pr_created' &&
+        isMissingRequiredPr(work.workType, agent.pullRequestUrl) &&
         deliveryAttempts < MAX_PR_DELIVERY_ATTEMPTS
       ) {
         deliveryAttempts++
@@ -898,7 +903,7 @@ export async function runWorker(
 
       // If delivery still failed after retries, post a single diagnostic comment
       // to the issue (the orchestrator stays silent to avoid duplicate comments).
-      if (agent?.status === 'incomplete' && agent.incompleteReason === 'no_pr_created') {
+      if (agent?.status === 'incomplete' && isMissingRequiredPr(work.workType, agent.pullRequestUrl)) {
         try {
           await tracker.createComment(
             work.issueIdentifier,
