@@ -2329,24 +2329,15 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
       if (agent.status === 'completed' && isMissingRequiredPr(agent.workType, agent.pullRequestUrl)) {
         agent.status = 'incomplete'
         agent.incompleteReason = agent.incompleteReason ?? 'no_pr_created'
+        // The worktree is preserved by the cleanup block below, so the caller
+        // (worker) can auto-continue the same session to deliver the PR. The
+        // user-facing diagnostic — if delivery ultimately fails — is posted once
+        // by the worker after its retries are exhausted, not here (which would
+        // duplicate the comment on every attempt).
         log?.warn('No pull request produced — not promoting issue', {
           issueId,
           workType: agent.workType,
         })
-        try {
-          await this.client.createComment(
-            issueId,
-            `⚠️ The agent finished without opening a pull request, so this issue was **not** marked complete.\n\n` +
-            `Code work must end by committing changes, pushing the branch, and opening a PR — ` +
-            `the orchestrator links the PR from the agent's final output, and no PR URL was detected. ` +
-            `(If a PR was opened, its URL was not surfaced in the agent's output.)\n\n` +
-            `The worktree has been preserved for inspection or retry. Re-run the issue or open the PR manually.`
-          )
-        } catch (error) {
-          log?.warn('Failed to post no-PR diagnostic comment', {
-            error: error instanceof Error ? error.message : String(error),
-          })
-        }
       }
 
       // Update state file to completed (only for worktree-based agents)

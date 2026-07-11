@@ -120,6 +120,11 @@ export function shouldForwardProgressToCoordinator(trackerName: string): boolean
 
 const MAX_HEARTBEAT_FAILURES = 3
 
+// Code-producing agents sometimes finish implementing without committing/pushing/
+// opening a PR (the orchestrator demotes those to 'incomplete'). Re-prompt the
+// same session to deliver the PR, bounded so a stubborn agent can't loop forever.
+const MAX_PR_DELIVERY_ATTEMPTS = 2
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -838,9 +843,76 @@ export async function runWorker(
       // Wait for agent to complete
       agentLog.info('Waiting for agent to complete...')
       const results = await orchestrator.waitForAll()
-      const agent = results[0]
+      let agent = results[0]
 
       clearInterval(stopChecker)
+
+      // Auto-continue delivery: a code work type that finished without opening a
+      // PR is demoted to 'incomplete' (reason 'no_pr_created') by the orchestrator,
+      // which preserves the worktree. Re-prompt the same session — same worktree,
+      // same provider session — to commit, push, and open the PR. If the agent
+      // now produces a PR, the orchestrator promotes it normally on the next pass.
+      let deliveryAttempts = 0
+      while (
+        running &&
+        !stopRequested &&
+        agent?.status === 'incomplete' &&
+        agent.incompleteReason === 'no_pr_created' &&
+        deliveryAttempts < MAX_PR_DELIVERY_ATTEMPTS
+      ) {
+        deliveryAttempts++
+        agentLog.warn(
+          `Agent finished without a PR — auto-continuing to deliver ` +
+          `(attempt ${deliveryAttempts}/${MAX_PR_DELIVERY_ATTEMPTS})`,
+        )
+        await postProgress(
+          work.sessionId,
+          'waiting',
+          `No PR yet — asking the agent to commit and open a PR (attempt ${deliveryAttempts}/${MAX_PR_DELIVERY_ATTEMPTS})`,
+        )
+
+        const deliveryPrompt =
+          `Your previous session implemented changes in this worktree but did NOT open a pull request, ` +
+          `so the work has not been delivered. Do NOT redo the implementation. Now, as your only remaining task:\n` +
+          `1. Commit all your changes on the current branch (do NOT commit the .agent/ directory).\n` +
+          `2. Push the branch: git push -u origin HEAD\n` +
+          `3. Open a pull request referencing ${work.issueIdentifier}: gh pr create --fill ` +
+          `(if a PR already exists for this branch, just push and report its URL).\n` +
+          `4. Include the pull request URL verbatim in your final message.`
+
+        const fwd = await orchestrator.forwardPrompt(
+          work.issueId,
+          work.sessionId,
+          deliveryPrompt,
+          agent.providerSessionId,
+          work.workType,
+        )
+        if (!fwd.forwarded) {
+          agentLog.warn('Auto-continue could not resume the agent', { reason: fwd.reason })
+          break
+        }
+
+        const retryResults = await orchestrator.waitForAll()
+        agent = retryResults[0] ?? agent
+      }
+
+      // If delivery still failed after retries, post a single diagnostic comment
+      // to the issue (the orchestrator stays silent to avoid duplicate comments).
+      if (agent?.status === 'incomplete' && agent.incompleteReason === 'no_pr_created') {
+        try {
+          await tracker.createComment(
+            work.issueIdentifier,
+            `⚠️ The agent implemented changes but did not open a pull request after ` +
+            `${deliveryAttempts} delivery ${deliveryAttempts === 1 ? 'attempt' : 'attempts'}, ` +
+            `so this issue was **not** marked complete. The worktree has been preserved for ` +
+            `inspection or retry — re-run the issue or open the PR manually.`,
+          )
+        } catch (error) {
+          agentLog.warn('Failed to post no-PR diagnostic comment', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
 
       // Determine final status
       if (stopRequested || agent?.stopReason === 'user_request') {
