@@ -805,6 +805,32 @@ const WORK_TYPE_SUFFIX: Record<AgentWorkType, string> = {
 }
 
 /**
+ * Work types whose deliverable is a pull request. If an agent finishes one of
+ * these without a detected PR URL, the orchestrator treats it as incomplete
+ * rather than promoting the issue to its "done" status — otherwise an issue
+ * advances with nothing to review (see tamsh/kenko-ichiban#218). Result-sensitive
+ * types (qa/acceptance) and non-code types (research/backlog-creation/
+ * coordination) are excluded — they don't produce PRs.
+ */
+const REQUIRES_PR_DELIVERABLE: ReadonlySet<AgentWorkType> = new Set<AgentWorkType>([
+  'development',
+  'inflight',
+  'refinement',
+])
+
+/**
+ * True when a "completed" agent should be demoted to 'incomplete' because its
+ * work type owes a pull request but none was detected. Keeps the promotion gate
+ * a single testable decision.
+ */
+export function isMissingRequiredPr(
+  workType: AgentWorkType | undefined,
+  pullRequestUrl: string | null | undefined
+): boolean {
+  return !!workType && REQUIRES_PR_DELIVERABLE.has(workType) && !pullRequestUrl
+}
+
+/**
  * Sanitize an issue identifier so it is safe to use as a git branch name and
  * worktree directory. Linear identifiers (e.g. "SUP-294") are already valid git
  * refs and pass through unchanged. GitHub identifiers (e.g. "#204") are not —
@@ -2294,6 +2320,35 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
       }
       agent.completedAt = new Date()
 
+      // Enforce PR delivery for code-producing work types. An agent that
+      // "completed" without opening a pull request has shipped nothing
+      // reviewable, so demote it to 'incomplete' BEFORE any status promotion or
+      // completion comment — otherwise the issue advances to its done status
+      // with no deliverable (see tamsh/kenko-ichiban#218). The worktree is
+      // preserved by the cleanup block below for inspection / retry.
+      if (agent.status === 'completed' && isMissingRequiredPr(agent.workType, agent.pullRequestUrl)) {
+        agent.status = 'incomplete'
+        agent.incompleteReason = agent.incompleteReason ?? 'no_pr_created'
+        log?.warn('No pull request produced — not promoting issue', {
+          issueId,
+          workType: agent.workType,
+        })
+        try {
+          await this.client.createComment(
+            issueId,
+            `⚠️ The agent finished without opening a pull request, so this issue was **not** marked complete.\n\n` +
+            `Code work must end by committing changes, pushing the branch, and opening a PR — ` +
+            `the orchestrator links the PR from the agent's final output, and no PR URL was detected. ` +
+            `(If a PR was opened, its URL was not surfaced in the agent's output.)\n\n` +
+            `The worktree has been preserved for inspection or retry. Re-run the issue or open the PR manually.`
+          )
+        } catch (error) {
+          log?.warn('Failed to post no-PR diagnostic comment', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
       // Update state file to completed (only for worktree-based agents)
       if (agent.worktreePath) {
         try {
@@ -2425,10 +2480,11 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
         await this.postCompletionComment(issueId, sessionId, agent.resultMessage, log)
       }
 
-      // Clean up worktree for completed agents
+      // Clean up worktree for completed agents — and for agents demoted to
+      // 'incomplete' above (no PR), so their preserve/heartbeat handling still runs.
       // NOTE: This must happen AFTER the agent exits to avoid breaking its shell session
       // Agents should NEVER clean up their own worktree - this is the orchestrator's job
-      if (agent.status === 'completed' && agent.worktreePath) {
+      if ((agent.status === 'completed' || agent.status === 'incomplete') && agent.worktreePath) {
         const shouldPreserve = this.config.preserveWorkOnPrFailure ?? DEFAULT_CONFIG.preserveWorkOnPrFailure
         let shouldCleanup = true
 
