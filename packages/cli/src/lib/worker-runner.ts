@@ -925,10 +925,10 @@ export async function runWorker(
         try {
           await tracker.createComment(
             work.issueIdentifier,
-            `⚠️ The agent implemented changes but did not open a pull request after ` +
-            `${deliveryAttempts} delivery ${deliveryAttempts === 1 ? 'attempt' : 'attempts'}, ` +
-            `so this issue was **not** marked complete. The worktree has been preserved for ` +
-            `inspection or retry — re-run the issue or open the PR manually.`,
+            `⚠️ No pull request was opened after ${deliveryAttempts} delivery ` +
+            `${deliveryAttempts === 1 ? 'attempt' : 'attempts'}, so this issue was **not** ` +
+            `marked complete. The worktree has been preserved (with any changes the agent ` +
+            `made) for inspection or retry — re-run the issue or open the PR manually.`,
           )
         } catch (error) {
           agentLog.warn('Failed to post no-PR diagnostic comment', {

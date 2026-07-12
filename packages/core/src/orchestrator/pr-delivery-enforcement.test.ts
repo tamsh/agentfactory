@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { AgentWorkType } from '@supaku/agentfactory-linear'
 import { isMissingRequiredPr } from './orchestrator.js'
 
 /**
@@ -13,7 +14,6 @@ describe('isMissingRequiredPr', () => {
     expect(isMissingRequiredPr('development', undefined)).toBe(true)
     expect(isMissingRequiredPr('development', '')).toBe(true)
     expect(isMissingRequiredPr('inflight', null)).toBe(true)
-    expect(isMissingRequiredPr('refinement', null)).toBe(true)
   })
 
   it('accepts code work types that produced a PR', () => {
@@ -31,5 +31,25 @@ describe('isMissingRequiredPr', () => {
 
   it('is a no-op when work type is undefined', () => {
     expect(isMissingRequiredPr(undefined, null)).toBe(false)
+  })
+
+  // Exhaustive per-work-type table: ONLY development/inflight open PRs. This
+  // guards against re-adding a non-code type (e.g. refinement — a triage type
+  // that disallows git and transitions Rejected → Backlog; gating it would
+  // strand the issue in Rejected and break the QA-failure retry loop).
+  it.each<[AgentWorkType, boolean]>([
+    ['development', true],
+    ['inflight', true],
+    ['research', false],
+    ['backlog-creation', false],
+    ['coordination', false],
+    ['qa', false],
+    ['acceptance', false],
+    ['refinement', false],
+    ['refinement-coordination', false],
+    ['qa-coordination', false],
+    ['acceptance-coordination', false],
+  ])('work type %s requires a PR = %s (no PR URL)', (workType, expected) => {
+    expect(isMissingRequiredPr(workType, null)).toBe(expected)
   })
 })

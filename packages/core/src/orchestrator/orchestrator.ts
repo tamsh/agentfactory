@@ -808,14 +808,19 @@ const WORK_TYPE_SUFFIX: Record<AgentWorkType, string> = {
  * Work types whose deliverable is a pull request. If an agent finishes one of
  * these without a detected PR URL, the orchestrator treats it as incomplete
  * rather than promoting the issue to its "done" status — otherwise an issue
- * advances with nothing to review (see tamsh/kenko-ichiban#218). Result-sensitive
- * types (qa/acceptance) and non-code types (research/backlog-creation/
- * coordination) are excluded — they don't produce PRs.
+ * advances with nothing to review (see tamsh/kenko-ichiban#218).
+ *
+ * Only `development` and `inflight` write code and open PRs. Everything else is
+ * excluded because it produces no PR and gating it here would wrongly block its
+ * own transition: qa/acceptance are result-sensitive (marker-driven); research/
+ * backlog-creation/*coordination don't touch code; and `refinement` is a TRIAGE
+ * type (its template disallows git/file edits and it transitions Rejected →
+ * Backlog for a dev agent to retry — demoting it would strand the issue in
+ * Rejected and break the QA-failure retry loop).
  */
 const REQUIRES_PR_DELIVERABLE: ReadonlySet<AgentWorkType> = new Set<AgentWorkType>([
   'development',
   'inflight',
-  'refinement',
 ])
 
 /**
