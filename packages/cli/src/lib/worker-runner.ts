@@ -888,6 +888,12 @@ export async function runWorker(
           `(if a PR already exists for this branch, just push and report its URL).\n` +
           `4. Include the pull request URL verbatim in your final message.`
 
+        // A stop can land during the awaits above while no resume agent is yet
+        // running — the stopChecker self-clears the moment it detects a stop, so
+        // it won't be alive to cancel the resume we're about to spawn. Re-check
+        // here so the stop isn't lost across the idle gap.
+        if (!running || stopRequested) break
+
         const fwd = await orchestrator.forwardPrompt(
           work.issueId,
           work.sessionId,

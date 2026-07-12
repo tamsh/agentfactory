@@ -2344,7 +2344,7 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
       if (agent.worktreePath) {
         try {
           updateState(agent.worktreePath, {
-            status: agent.status === 'stopped' ? 'stopped' : agent.status === 'failed' ? 'failed' : 'completed',
+            status: agent.status === 'stopped' ? 'stopped' : (agent.status === 'failed' || agent.status === 'incomplete') ? 'failed' : 'completed',
             pullRequestUrl: agent.pullRequestUrl ?? undefined,
           })
         } catch {
@@ -2529,7 +2529,10 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
       }
 
       // Finalize session logger before cleanup
-      const finalStatus = agent.status === 'completed' ? 'completed' : (agent.status === 'stopped' ? 'stopped' : 'completed')
+      // Map to the session-logger's status set. Anything that isn't completed
+      // or stopped (e.g. a demoted 'incomplete' — no PR delivered) is a failure,
+      // not a success — the old fallthrough to 'completed' mislabeled it.
+      const finalStatus = agent.status === 'completed' ? 'completed' : agent.status === 'stopped' ? 'stopped' : 'failed'
       this.finalizeSessionLogger(issueId, finalStatus, {
         pullRequestUrl: agent.pullRequestUrl,
       })
