@@ -83,7 +83,7 @@ export type {
 } from './log-analyzer.js'
 
 // Orchestrator
-export { AgentOrchestrator, createOrchestrator, getWorktreeIdentifier, sanitizeGitRef, validateGitRemote } from './orchestrator.js'
+export { AgentOrchestrator, createOrchestrator, getWorktreeIdentifier, isMissingRequiredPr, sanitizeGitRef, validateGitRemote } from './orchestrator.js'
 
 // Stream Parser
 export { ClaudeStreamParser, createStreamParser } from './stream-parser.js'

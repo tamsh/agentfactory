@@ -805,6 +805,37 @@ const WORK_TYPE_SUFFIX: Record<AgentWorkType, string> = {
 }
 
 /**
+ * Work types whose deliverable is a pull request. If an agent finishes one of
+ * these without a detected PR URL, the orchestrator treats it as incomplete
+ * rather than promoting the issue to its "done" status — otherwise an issue
+ * advances with nothing to review (see tamsh/kenko-ichiban#218).
+ *
+ * Only `development` and `inflight` write code and open PRs. Everything else is
+ * excluded because it produces no PR and gating it here would wrongly block its
+ * own transition: qa/acceptance are result-sensitive (marker-driven); research/
+ * backlog-creation/*coordination don't touch code; and `refinement` is a TRIAGE
+ * type (its template disallows git/file edits and it transitions Rejected →
+ * Backlog for a dev agent to retry — demoting it would strand the issue in
+ * Rejected and break the QA-failure retry loop).
+ */
+const REQUIRES_PR_DELIVERABLE: ReadonlySet<AgentWorkType> = new Set<AgentWorkType>([
+  'development',
+  'inflight',
+])
+
+/**
+ * True when a "completed" agent should be demoted to 'incomplete' because its
+ * work type owes a pull request but none was detected. Keeps the promotion gate
+ * a single testable decision.
+ */
+export function isMissingRequiredPr(
+  workType: AgentWorkType | undefined,
+  pullRequestUrl: string | null | undefined
+): boolean {
+  return !!workType && REQUIRES_PR_DELIVERABLE.has(workType) && !pullRequestUrl
+}
+
+/**
  * Sanitize an issue identifier so it is safe to use as a git branch name and
  * worktree directory. Linear identifiers (e.g. "SUP-294") are already valid git
  * refs and pass through unchanged. GitHub identifiers (e.g. "#204") are not —
@@ -2294,11 +2325,31 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
       }
       agent.completedAt = new Date()
 
+      // Enforce PR delivery for code-producing work types. An agent that
+      // "completed" without opening a pull request has shipped nothing
+      // reviewable, so demote it to 'incomplete' BEFORE any status promotion or
+      // completion comment — otherwise the issue advances to its done status
+      // with no deliverable (see tamsh/kenko-ichiban#218). The worktree is
+      // preserved by the cleanup block below for inspection / retry.
+      if (agent.status === 'completed' && isMissingRequiredPr(agent.workType, agent.pullRequestUrl)) {
+        agent.status = 'incomplete'
+        agent.incompleteReason = agent.incompleteReason ?? 'no_pr_created'
+        // The worktree is preserved by the cleanup block below, so the caller
+        // (worker) can auto-continue the same session to deliver the PR. The
+        // user-facing diagnostic — if delivery ultimately fails — is posted once
+        // by the worker after its retries are exhausted, not here (which would
+        // duplicate the comment on every attempt).
+        log?.warn('No pull request produced — not promoting issue', {
+          issueId,
+          workType: agent.workType,
+        })
+      }
+
       // Update state file to completed (only for worktree-based agents)
       if (agent.worktreePath) {
         try {
           updateState(agent.worktreePath, {
-            status: agent.status === 'stopped' ? 'stopped' : agent.status === 'failed' ? 'failed' : 'completed',
+            status: agent.status === 'stopped' ? 'stopped' : (agent.status === 'failed' || agent.status === 'incomplete') ? 'failed' : 'completed',
             pullRequestUrl: agent.pullRequestUrl ?? undefined,
           })
         } catch {
@@ -2425,10 +2476,11 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
         await this.postCompletionComment(issueId, sessionId, agent.resultMessage, log)
       }
 
-      // Clean up worktree for completed agents
+      // Clean up worktree for completed agents — and for agents demoted to
+      // 'incomplete' above (no PR), so their preserve/heartbeat handling still runs.
       // NOTE: This must happen AFTER the agent exits to avoid breaking its shell session
       // Agents should NEVER clean up their own worktree - this is the orchestrator's job
-      if (agent.status === 'completed' && agent.worktreePath) {
+      if ((agent.status === 'completed' || agent.status === 'incomplete') && agent.worktreePath) {
         const shouldPreserve = this.config.preserveWorkOnPrFailure ?? DEFAULT_CONFIG.preserveWorkOnPrFailure
         let shouldCleanup = true
 
@@ -2482,7 +2534,10 @@ ORCHESTRATOR_INSTALL=1 exec pnpm add "$@"
       }
 
       // Finalize session logger before cleanup
-      const finalStatus = agent.status === 'completed' ? 'completed' : (agent.status === 'stopped' ? 'stopped' : 'completed')
+      // Map to the session-logger's status set. Anything that isn't completed
+      // or stopped (e.g. a demoted 'incomplete' — no PR delivered) is a failure,
+      // not a success — the old fallthrough to 'completed' mislabeled it.
+      const finalStatus = agent.status === 'completed' ? 'completed' : agent.status === 'stopped' ? 'stopped' : 'failed'
       this.finalizeSessionLogger(issueId, finalStatus, {
         pullRequestUrl: agent.pullRequestUrl,
       })
