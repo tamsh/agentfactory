@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Self-routing QA reviewer personas** — QA agents now adopt the review lens of a matched reviewer persona based on the issue's labels. A new `partials/qa-persona-routing.yaml` partial (included by `qa.yaml`, `qa-native.yaml`, and `qa-retry.yaml`) instructs the QA agent to fetch the issue's labels via `af-issue get-issue` and apply the matching persona's checklist — Coletrain (architecture/systems), Mike (product correctness, default), Shirlene (UX/design), Poppy (AI/eval), or Shady (business/finance) — on top of base acceptance/build/test validation. The `security` label routes to Coletrain **and** Mike. Routing is pure prompt-level (no orchestrator/config/schema changes) and additive/read-only — it never relaxes a hard-fail or grants merge authority. Repos can override the default table with a `.agentfactory/qa-routing.yaml` file.
+
+### Fixes
+
+- **Ship workflow templates in `dist` reliably** — `tsc` never emitted the `.yaml` templates under `src/templates/defaults`, so a published package (or any `pnpm clean && build`) produced a `dist` with no templates and the registry silently fell back to hardcoded prompts. A hand-created `dist/…/defaults` symlink papered over this locally but did not survive a clean rebuild or `npm pack`. Added `packages/core/scripts/copy-templates.mjs`, run as part of `build` (`tsc && node scripts/copy-templates.mjs`), which copies the templates into `dist` after compilation.
+
 ## v0.7.58
 
 ### Fixes

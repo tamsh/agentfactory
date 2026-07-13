@@ -21,6 +21,8 @@ prompt: |
   Validate the implementation against acceptance criteria.
   Run build, tests, and validation checks. Verify the PR meets requirements.
 
+  {{> partials/qa-persona-routing}}
+
   ## Build Commands
 
   {{#if buildCommand}}

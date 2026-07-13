@@ -21,6 +21,8 @@ prompt: |
   {{/each}}
   {{/if}}
 
+  {{> partials/qa-persona-routing}}
+
   ## Instructions
   1. Focus testing on previously failing areas first
   2. Run the full test suite: `{{packageManager}} test` and `{{packageManager}} typecheck`
