@@ -10,6 +10,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import type { WorkflowTemplate, PartialTemplate } from './types.js'
 import { validateWorkflowTemplate, validatePartialTemplate } from './types.js'
@@ -131,8 +132,11 @@ function loadPartialsRecursive(
  * Get the path to the built-in default templates directory.
  */
 export function getBuiltinDefaultsDir(): string {
-  // Resolve relative to this file's location
-  return path.join(path.dirname(new URL(import.meta.url).pathname), 'defaults')
+  // Resolve relative to this file's location. Use fileURLToPath (not
+  // `new URL(...).pathname`) so the path is percent-decoded and correct on
+  // Windows — otherwise a checkout path containing a space (or any Windows
+  // path) yields a dir that doesn't exist, silently dropping all templates.
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), 'defaults')
 }
 
 /**

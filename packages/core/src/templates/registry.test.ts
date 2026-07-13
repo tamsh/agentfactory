@@ -185,6 +185,52 @@ describe('TemplateRegistry', () => {
       expect(result).toContain('WORK_RESULT:failed')
     })
 
+    // qa / qa-native / qa-retry all resolve from workType 'qa' + strategy
+    // (getTemplate builds the key `${workType}-${strategy}`).
+    it.each([
+      ['qa', undefined],
+      ['qa-native', 'native'],
+      ['qa-retry', 'retry'],
+    ] as const)(
+      'built-in %s template includes persona-routing partial',
+      (_label, strategy) => {
+        const fullRegistry = TemplateRegistry.create({ useBuiltinDefaults: true })
+        const result = fullRegistry.renderPrompt('qa', {
+          identifier: 'SUP-1',
+          linearCli: 'pnpm af-issue',
+          packageManager: 'pnpm',
+          // qa-retry references attemptNumber
+          attemptNumber: 2,
+        }, strategy)
+        // Routing header + the label-fetch instruction
+        expect(result).toContain('REVIEWER PERSONA ROUTING')
+        expect(result).toContain('pnpm af-issue get-issue SUP-1')
+        // All five reviewer personas must be present as selectable lenses
+        expect(result).toContain('COLETRAIN')
+        expect(result).toContain('MIKE')
+        expect(result).toContain('SHIRLENE')
+        expect(result).toContain('POPPY')
+        expect(result).toContain('SHADY')
+        // security is cross-cutting → both Coletrain and Mike
+        expect(result).toContain('security')
+        // Additive + read-only guarantees preserved
+        expect(result).toContain('ADDITIVE')
+        expect(result).toContain('WORK_RESULT:failed')
+        // Mike is the always-on correctness floor (not merely a no-match default)
+        expect(result).toContain('ALWAYS applies')
+        // Label fetch has an explicit graceful-degradation path
+        expect(result).toContain('If this fetch fails')
+      }
+    )
+
+    it('persona routing keeps Shady scoped to finance, not security', () => {
+      const fullRegistry = TemplateRegistry.create({ useBuiltinDefaults: true })
+      const result = fullRegistry.renderPrompt('qa', { identifier: 'SUP-1' })
+      // Shady is the CFO/finance persona; security routes to Coletrain AND Mike.
+      expect(result).toContain('SHADY — Startup CFO')
+      expect(result).toContain('security   → Coletrain AND Mike')
+    })
+
     it('built-in coordination template includes shared worktree safety', () => {
       const fullRegistry = TemplateRegistry.create({ useBuiltinDefaults: true })
       const result = fullRegistry.renderPrompt('coordination', { identifier: 'SUP-1' })

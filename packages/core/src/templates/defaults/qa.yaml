@@ -18,6 +18,8 @@ prompt: |
   Validate the implementation against acceptance criteria.
   Run tests, check for regressions, verify the PR meets requirements.
 
+  {{> partials/qa-persona-routing}}
+
   {{#if buildCommand}}
   Build: `{{buildCommand}}`
   {{/if}}
