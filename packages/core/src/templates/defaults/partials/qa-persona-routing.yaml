@@ -15,12 +15,16 @@ content: |
   Before validating, decide WHO is reviewing this issue:
 
   1. Fetch the labels:  `{{linearCli}} get-issue {{identifier}}` and read the
-     `labels` array from the JSON output.
+     `labels` array from the JSON output. If this fetch fails (auth, network,
+     unknown id), do NOT block — skip label-based routing, apply Mike's floor
+     lens (see step 3), and say so in your report.
   2. If the repo has a `.agentfactory/qa-routing.yaml` file, read it — its
      `labels:` → persona map OVERRIDES the default table below. Otherwise use
      the defaults.
-  3. Match labels to persona(s). A label may match more than one persona; apply
-     EVERY matched lens. If no label matches, use the generalist lens (Mike).
+  3. Mike's correctness / production-readiness lens ALWAYS applies — it is the
+     floor for every QA run, whether or not any label matches him. On top of
+     that floor, match labels to specialist persona(s) and apply EVERY matched
+     lens (a label may match more than one).
   4. The persona lens is ADDITIVE. It runs ON TOP OF the base acceptance-criteria,
      build, and test validation — it never replaces them and never relaxes a
      hard-fail rule.
@@ -29,7 +33,7 @@ content: |
     architecture, api, backend, data-integrity, performance, scalability,
       type-safety, llm-integration, dependencies    → Coletrain
     bug, feature, improvement, product, regression, code-quality, chore,
-      state-management, production-readiness, typescript  → Mike  (default lens)
+      state-management, production-readiness, typescript  → Mike  (always — the floor)
     ux, ui, design, web, copy, accessibility, a11y, email, notifications  → Shirlene
     ai, llm, eval, ai-quality, prompt, ai-prd, model-selection, llm-judge  → Poppy
     finance, pricing, monetization, unit-economics, fundraising,

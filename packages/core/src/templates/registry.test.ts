@@ -216,6 +216,10 @@ describe('TemplateRegistry', () => {
         // Additive + read-only guarantees preserved
         expect(result).toContain('ADDITIVE')
         expect(result).toContain('WORK_RESULT:failed')
+        // Mike is the always-on correctness floor (not merely a no-match default)
+        expect(result).toContain('ALWAYS applies')
+        // Label fetch has an explicit graceful-degradation path
+        expect(result).toContain('If this fetch fails')
       }
     )
 
